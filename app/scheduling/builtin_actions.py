@@ -96,7 +96,7 @@ def register_builtin_actions() -> None:
             description=(
                 "Asks the AI to rate again every release the target's consoles "
                 "and devices could update to, with what the community has said "
-                "since. Needs a model in Settings → Releases. Skips releases a "
+                "since. Needs a model in Settings → Assessments. Skips releases a "
                 "person has rated or allowed by hand."
             ),
             run=_run_assess_releases,

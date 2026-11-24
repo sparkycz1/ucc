@@ -174,7 +174,7 @@ class CommunityClient:
             raise SourceError(f"community.ui.com: {_str(first.get('message')) or 'error'}")
         return _dict(body.get("data"))
 
-    async def _search(self, term: str, limit: int = 25) -> list[Any]:
+    async def search(self, term: str, limit: int = 25) -> list[Any]:
         data = await self._query(_RELEASES_QUERY, {"searchTerm": term, "limit": limit})
         return _list(_dict(data.get("releases")).get("items"))
 
@@ -182,13 +182,13 @@ class CommunityClient:
         """The release post for this exact version — searched by the version
         number (the search matches it reliably), then by product name."""
         normalized = normalize_version(version) or version
-        found = pick_release(kind, product, normalized, await self._search(normalized))
+        found = pick_release(kind, product, normalized, await self.search(normalized))
         if found is None:
             found = pick_release(
                 kind,
                 product,
                 normalized,
-                await self._search(f"{search_term(kind, product)} {normalized}"),
+                await self.search(f"{search_term(kind, product)} {normalized}"),
             )
         return found
 
@@ -208,7 +208,7 @@ class CommunityClient:
         if current is not None:
             same_line = [
                 item
-                for item in await self._search(current.title, 30)
+                for item in await self.search(current.title, 30)
                 if _str(_dict(item).get("title")) == current.title
             ]
             latest = pick_latest(kind, product, same_line)
@@ -216,7 +216,7 @@ class CommunityClient:
                 return latest
         if kind == ReleaseKind.FIRMWARE:
             return None
-        return pick_latest(kind, product, await self._search(search_term(kind, product), 30))
+        return pick_latest(kind, product, await self.search(search_term(kind, product), 30))
 
     async def collect(self, evidence: Evidence, kind: str, product: str, version: str) -> None:
         """Fill `evidence` with the release post, its comments and matching

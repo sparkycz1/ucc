@@ -57,3 +57,24 @@
     </span>
   {%- endif -%}
 {%- endmacro %}
+
+{# A release's sources as short links — "community.ui.com · reddit 1 · 2" —
+   for lists; the release's own page lists them in full. Only http(s) URLs
+   are linked (they come from parsed third-party replies). #}
+{% macro source_links(release, limit=4) -%}
+  {%- set sources = release.sources or [] -%}
+  {%- if not sources and release.community_url -%}
+    <a href="{{ release.community_url }}" target="_blank" rel="noopener noreferrer">community.ui.com</a>
+  {%- elif not sources -%}
+    —
+  {%- else -%}
+    <span class="source-links">
+    {%- for source in sources[:limit] %}
+      {%- if source.url and (source.url.startswith('https://') or source.url.startswith('http://')) %}
+        <a href="{{ source.url }}" target="_blank" rel="noopener noreferrer nofollow" title="{{ source.title }}">{{ t(request, "releases.source_kind." ~ source.kind) if source.kind in ('community', 'reddit', 'web') else source.kind }}</a>
+      {%- endif %}
+    {%- endfor %}
+    {%- if sources | length > limit %} <a href="/releases/{{ release.id }}">+{{ (sources | length) - limit }}</a>{% endif %}
+    </span>
+  {%- endif -%}
+{%- endmacro %}

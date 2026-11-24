@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "partials/_release.html" import version_link, risk_badge, source_links with context %}
+
+{% block title %}{{ t(request, "nav.releases") }} — ucc{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>{{ t(request, "nav.releases") }}</h1>
+    <div class="page-header-actions">
+      <a class="button button-secondary" href="/assessments">{{ t(request, "nav.assessments") }}</a>
+    </div>
+  </div>
+
+  <p class="hint">{{ t(request, "catalog.intro", level=max_risk_level) }}</p>
+  {% if not assessment_configured %}
+    <div class="alert alert-warn"><p>{{ t(request, "releases.not_configured") }}</p></div>
+  {% endif %}
+
+  {% if not catalog %}
+    <section class="panel"><p class="hint">{{ t(request, "catalog.empty") }}</p></section>
+  {% endif %}
+
+  {% for product, releases in catalog.items() %}
+    <section class="panel">
+      <h2>{{ titles.get(product, product) }}</h2>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>{{ t(request, "fabrics.table.version") }}</th>
+            <th>{{ t(request, "releases.table.stage") }}</th>
+            <th>{{ t(request, "catalog.published") }}</th>
+            <th>{{ t(request, "releases.table.risk") }}</th>
+            <th>{{ t(request, "releases.table.why") }}</th>
+            <th>{{ t(request, "releases.sources") }}</th>
+            <th>{{ t(request, "catalog.yours") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for release in releases %}
+            <tr>
+              <td class="nowrap"><strong>{{ version_link(release.kind, release.product, release.version) }}</strong></td>
+              <td>{{ release.stage or '—' }}</td>
+              <td class="nowrap">{{ release.published_at | local_time('%Y-%m-%d') if release.published_at else '—' }}</td>
+              <td class="nowrap">
+                <a href="/releases/{{ release.id }}">{{ risk_badge(release.effective_risk_level, release.short_reason) }}</a>
+                {% if release.manual_risk_level is not none %}<span class="badge">{{ t(request, "releases.manual") }}</span>{% endif %}
+                {% if release.is_allowed %}<span class="badge badge-ok">{{ t(request, "releases.allowed") }}</span>{% endif %}
+              </td>
+              <td>{{ release.short_reason or ('—' if release.effective_risk_level is not none else t(request, "releases.waiting")) }}</td>
+              <td>{{ source_links(release) }}</td>
+              <td>{{ installed.get((release.product, release.version), 0) or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% endfor %}
+{% endblock %}

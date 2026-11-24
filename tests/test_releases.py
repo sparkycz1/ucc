@@ -726,7 +726,7 @@ async def test_release_pages_and_permissions(
         db_session_factory, fabric_id, risk_level=4, reason="STP broken, cameras flicker"
     )
 
-    listing = await client.get("/releases")
+    listing = await client.get("/assessments")
     assert listing.status_code == 200
     assert "STP broken, cameras flicker" in listing.text
     # Current → new.
@@ -767,6 +767,7 @@ async def test_release_pages_and_permissions(
 
     await login_as(client, permissions=set(), username="nobody")
     assert (await client.get("/releases")).status_code == 403
+    assert (await client.get("/assessments")).status_code == 403
 
 
 async def test_release_detail_lists_only_visible_fabrics(
@@ -872,3 +873,156 @@ async def test_scheduled_reassess_action_enqueues_per_release(
     assert result.attempted == 2
     assert celery_calls.names.count("app.tasks.release_jobs.assess_release") == 2
     assert len(devices) == 3
+
+
+# --- 0.2.2: the catalogue, Assessments, the assistant's release tools ----------
+
+
+async def test_catalog_refresh_keeps_the_newest_three_and_queues_them(
+    jobs_db: Any, monkeypatch: pytest.MonkeyPatch, celery_calls: Any
+) -> None:
+    from app.releases import service
+
+    async def _search(self: Any, term: str, limit: int = 25) -> list[Any]:
+        if term != "UniFi Protect Application":
+            return []
+        return [
+            {"id": f"p{n}", "slug": "s", "title": "UniFi Protect Application",
+             "version": f"7.3.{n}", "stage": "GA", "createdAt": "2026-11-01T00:00:00Z"}
+            for n in (70, 74, 61, 50)
+        ] + [{"id": "x", "title": "UniFi Protect iOS", "version": "9.9.9"}]  # fmt: skip
+
+    monkeypatch.setattr(CommunityClient, "search", _search)
+    await _configure_model(jobs_db)
+    result = await release_jobs._refresh_release_catalog()
+    assert result == {"ok": True, "catalog": 3, "queued": 3}
+    async with jobs_db() as db:
+        rows = (await service.catalog(db))["protect"]
+        assert [r.version for r in rows] == ["7.3.74", "7.3.70", "7.3.61"]
+        assert rows[0].community_url == "https://community.ui.com/releases/s/p74"
+    assert celery_calls.names.count("app.tasks.release_jobs.assess_release") == 3
+    # Already queued: a second refresh queues nothing.
+    assert (await release_jobs._refresh_release_catalog())["queued"] == 0
+
+
+async def test_catalog_and_assessments_pages(
+    client: Any, db_session_factory: Any, accept_any_api_key: Any
+) -> None:
+    from tests.conftest import create_fabric_via_web
+
+    fabric_id = await create_fabric_via_web(client, "Office")
+    await _web_release(db_session_factory, fabric_id, risk_level=2, reason="no notable reports")
+    async with db_session_factory() as db:
+        db.add(
+            Release(
+                kind="app", product="protect", version="7.3.70", title="UniFi Protect Application",
+                community_release_id="c1", community_url="https://community.ui.com/releases/x/c1",
+                risk_level=4, reason="cameras flicker",
+                sources=[{"kind": "reddit", "title": "t", "url": "https://www.reddit.com/r/x"}],
+            )
+        )  # fmt: skip
+        await db.commit()
+    page = await client.get("/releases")
+    assert page.status_code == 200
+    assert "UniFi Protect Application" in page.text and "cameras flicker" in page.text
+    assert 'href="https://www.reddit.com/r/x"' in page.text
+    # The console in this Fabric runs 7.3.70: counted under "your consoles".
+    assert ">1</td>" in page.text
+    assessments = await client.get("/assessments")
+    assert assessments.status_code == 200 and "no notable reports" in assessments.text
+    nav = await client.get("/dashboard")
+    assert 'href="/assessments"' in nav.text and 'href="/releases"' in nav.text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Protect", ("app", "protect")),
+        ("UniFi Network Application", ("app", "network")),
+        ("unifi network", ("app", "network")),
+        ("InnerSpace", ("app", "innerspace")),
+        ("G5 Flex", (None, "G5 Flex")),
+    ],
+)
+def test_resolve_product(text: str, expected: tuple[str | None, str]) -> None:
+    from app.ai.release_tools import resolve_product
+
+    assert resolve_product(text) == expected
+
+
+async def test_assistant_release_tools(
+    client: Any, db_session_factory: Any, accept_any_api_key: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.ai import release_tools
+    from app.ai.tools import TOOL_SPECS, available_tools, execute_read_only_tool
+    from tests.conftest import create_fabric_via_web
+
+    fabric_id = await create_fabric_via_web(client, "Office")
+    await _web_release(
+        db_session_factory, fabric_id, risk_level=4, reason="STP broken", summary="Bad.",
+        issues=[{"title": "STP", "detail": "loops"}],
+        sources=[{"kind": "community", "title": "notes", "url": "https://community.ui.com/r"}],
+    )  # fmt: skip
+    for name in ("list_release_ratings", "get_release_rating", "read_release_reports"):
+        assert name in TOOL_SPECS and not TOOL_SPECS[name].mutating
+
+    async with db_session_factory() as db:
+        from app.db.models.user import User
+
+        user = (await db.execute(select(User))).scalars().first()
+        assert user is not None
+        assert "read_release_reports" in [t.name for t in available_tools(user)]
+
+        listing = await execute_read_only_tool(
+            db,
+            user,
+            ToolCall(id="1", name="list_release_ratings", arguments={"product": "Protect"}),
+        )
+        assert "7.3.74" in listing and "risk 4/5" in listing and "STP broken" in listing
+        assert "pending on 1" in listing and "1 STOP" in listing
+
+        detail = await execute_read_only_tool(
+            db, user,
+            ToolCall(id="2", name="get_release_rating",
+                     arguments={"product": "protect", "version": "7.3.74"}),
+        )  # fmt: skip
+        assert "Why: STP broken" in detail and "issue: STP loops" in detail
+        assert "https://community.ui.com/r" in detail and "Office: HQ" in detail
+
+        missing = await execute_read_only_tool(
+            db, user,
+            ToolCall(id="3", name="get_release_rating",
+                     arguments={"product": "network", "version": "1.0.0"}),
+        )  # fmt: skip
+        assert "read_release_reports" in missing
+
+        async def _evidence(app_settings: Any, release: Release) -> Evidence:
+            assert (release.kind, release.product, release.version) == (
+                "app",
+                "network",
+                "11.0.104",
+            )
+            evidence = Evidence()
+            evidence.add(
+                EvidenceItem(
+                    kind="reddit",
+                    title="VLANs dropped",
+                    url="https://www.reddit.com/r/y",
+                    text="after 11.0.104 my VLANs dropped",
+                    score=50,
+                )
+            )
+            return evidence
+
+        monkeypatch.setattr(release_tools, "gather_evidence", _evidence)
+        reports = await execute_read_only_tool(
+            db, user,
+            ToolCall(id="4", name="read_release_reports",
+                     arguments={"product": "UniFi Network", "version": "11.0.104"}),
+        )  # fmt: skip
+        assert "VLANs dropped" in reports and "not a ucc rating" in reports
+        assert "<evidence>" in reports
+        bad = await execute_read_only_tool(
+            db, user, ToolCall(id="5", name="read_release_reports", arguments={"product": "x"})
+        )
+        assert "required" in bad

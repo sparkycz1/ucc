@@ -247,6 +247,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.release_jobs.reassess_releases",
         "schedule": crontab(hour=5, minute=10),
     },
+    # The Releases page's catalogue: every UniFi application's newest
+    # versions from community.ui.com (app.tasks.release_jobs). Fires once
+    # shortly after Beat starts, like every timedelta entry.
+    "refresh-release-catalog": {
+        "task": "app.tasks.release_jobs.refresh_release_catalog",
+        "schedule": timedelta(hours=6),
+    },
     "purge-old-notification-logs": {
         "task": "app.tasks.jobs.purge_old_notification_logs",
         "schedule": crontab(hour=3, minute=25),

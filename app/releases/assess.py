@@ -148,7 +148,13 @@ def parse_answer(text: str | None) -> AssessmentResult:
 
 
 def build_prompt(
-    *, label: str, version: str, stage: str | None, published_at: str | None, evidence: Evidence
+    *,
+    label: str,
+    version: str,
+    stage: str | None,
+    published_at: str | None,
+    evidence: Evidence,
+    max_chars: int = MAX_TOTAL_CHARS,
 ) -> str:
     """The user turn: what is being rated, then the evidence, bounded."""
     lines = [f"Release: {label} {version}"]
@@ -158,7 +164,7 @@ def build_prompt(
         lines.append(f"Published: {published_at}")
     lines.append("")
     lines.append("<evidence>")
-    budget = MAX_TOTAL_CHARS
+    budget = max_chars
     if evidence.release is not None and evidence.release.notes:
         notes = evidence.release.notes[: budget // 4]
         lines.append(f"## Official release notes ({evidence.release.url})\n{notes}\n")

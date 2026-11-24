@@ -6,10 +6,13 @@ nothing here ever grows a capability the web UI doesn't already have.
 
 Two categories, and the distinction is the whole safety model:
 
-- **Read-only** (`list_fabrics`, `list_devices`) — pure lookups against
-  ucc's own database. No UniFi API call, no side effects. These execute
-  immediately, server-side, and their result is fed straight back to the
-  model in the same turn.
+- **Read-only** (`list_fabrics`, `list_devices`, and the release tools in
+  `app.ai.release_tools`) — lookups against ucc's own database, plus
+  `read_release_reports`, which reads public forum sources
+  (community.ui.com, and Reddit / web search when configured). No UniFi
+  API call, no side effects, nothing stored. These execute immediately,
+  server-side, and their result is fed straight back to the model in the
+  same turn.
 - **Mutating** — none exist yet. When one is added (e.g. proposing an
   update), it must never execute from here: a mutating tool call produces a
   `pending_actions` entry a human reads and either Confirms or Discards,
@@ -37,6 +40,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import release_tools
 from app.ai.base import ToolCall, ToolDefinition
 from app.db.models.ai_message import PendingActionStatus
 from app.db.models.console import Console
@@ -48,6 +52,9 @@ from app.services.access_scope import fabrics_visible_to
 
 LIST_FABRICS = "list_fabrics"
 LIST_DEVICES = "list_devices"
+LIST_RELEASE_RATINGS = "list_release_ratings"
+GET_RELEASE_RATING = "get_release_rating"
+READ_RELEASE_REPORTS = "read_release_reports"
 
 # How many read-only tool round trips one user message may drive before the
 # loop gives up and returns whatever text the model has produced.
@@ -106,6 +113,88 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         permission=Permission.FABRIC_VIEW,
         mutating=False,
     ),
+    LIST_RELEASE_RATINGS: ToolSpec(
+        definition=ToolDefinition(
+            name=LIST_RELEASE_RATINGS,
+            description=(
+                "List UniFi releases ucc knows — the newest versions of every UniFi "
+                "application and every release a console or device in the operator's "
+                "Fabrics could update to — with their risk rating (1 stable … 5 "
+                "broken), a short reason, and how many pending updates are GO/STOP. "
+                "Optionally only one product (e.g. 'protect', 'network', a device model)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "product": {
+                        "type": "string",
+                        "description": "An application (network, protect, access, talk, "
+                        "connect, innerspace, drive) or a device/console model. Omit for all.",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        permission=Permission.FABRIC_VIEW,
+        mutating=False,
+    ),
+    GET_RELEASE_RATING: ToolSpec(
+        definition=ToolDefinition(
+            name=GET_RELEASE_RATING,
+            description=(
+                "The stored rating of one release: risk level, why, summary, the "
+                "reported problems, source links, manual decisions, and which of the "
+                "operator's consoles/devices it is pending on. Use this first when "
+                "asked whether a version is safe or what is broken in it."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "product": {
+                        "type": "string",
+                        "description": "Application (e.g. 'protect') or device/console model.",
+                    },
+                    "version": {"type": "string", "description": "e.g. '7.3.74'."},
+                },
+                "required": ["product", "version"],
+            },
+        ),
+        permission=Permission.FABRIC_VIEW,
+        mutating=False,
+    ),
+    READ_RELEASE_REPORTS: ToolSpec(
+        definition=ToolDefinition(
+            name=READ_RELEASE_REPORTS,
+            description=(
+                "Read, right now, what community.ui.com (release notes, comments, forum "
+                "questions) — and Reddit / web search if configured — say about any "
+                "UniFi version, including ones ucc has not rated. Returns raw reports "
+                "with links for you to judge. Slower; use when get_release_rating has "
+                "no rating or the operator asks for the latest reports."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "product": {
+                        "type": "string",
+                        "description": "Application (e.g. 'network') or device/console "
+                        "model (e.g. 'G5 Flex', 'UDM-Pro').",
+                    },
+                    "version": {"type": "string", "description": "e.g. '11.0.104'."},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["app", "os", "firmware"],
+                        "description": "app = UniFi application, os = UniFi OS of a "
+                        "console model, firmware = device firmware. Inferred for "
+                        "applications.",
+                    },
+                },
+                "required": ["product", "version"],
+            },
+        ),
+        permission=Permission.FABRIC_VIEW,
+        mutating=False,
+    ),
 }
 
 MUTATING_TOOLS = frozenset(name for name, spec in TOOL_SPECS.items() if spec.mutating)
@@ -121,6 +210,15 @@ Rules you must follow:
 
 - Use the read-only tools (list_fabrics, list_devices) to find out what \
 exists. Never guess a Fabric or device name.
+- Asked whether a UniFi version is safe, what is broken in it, or whether \
+to update: call get_release_rating (or list_release_ratings) and answer \
+from ucc's rating — the level, the reason, the main problems, and the \
+source links. If ucc has no rating, or the operator wants the latest \
+reports, call read_release_reports and judge the reports yourself, saying \
+plainly that this is your own reading and not a stored rating. Risk \
+levels: 1 stable, 2 minor issues, 3 caution, 4 high risk, 5 broken; above \
+the acceptable level ucc recommends STOP. You can't change a rating; a \
+person with release.manage can, on the release's page in ucc.
 - You cannot change anything. If the operator asks for an update, explain \
 where in ucc they can do it.
 - If a tool is not available to you, the operator's account does not have the \
@@ -236,6 +334,22 @@ async def execute_read_only_tool(db: AsyncSession, user: User, call: ToolCall) -
 
     if call.name == LIST_FABRICS:
         return await _fabrics_summary(db, user)
+    if call.name == LIST_RELEASE_RATINGS:
+        raw_product = call.arguments.get("product")
+        return await release_tools.list_release_ratings(
+            db, user, str(raw_product) if raw_product else None
+        )
+    if call.name in (GET_RELEASE_RATING, READ_RELEASE_REPORTS):
+        product = str(call.arguments.get("product") or "").strip()[:100]
+        version = str(call.arguments.get("version") or "").strip()[:64]
+        if not product or not version:
+            return "Both product and version are required."
+        if call.name == GET_RELEASE_RATING:
+            return await release_tools.get_release_rating(db, user, product, version)
+        raw_kind = call.arguments.get("kind")
+        return await release_tools.read_release_reports(
+            db, product, version, str(raw_kind) if raw_kind else None
+        )
     if call.name == LIST_DEVICES:
         raw_fabric = call.arguments.get("fabric_name")
         return await _devices_summary(

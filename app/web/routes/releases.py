@@ -1,10 +1,17 @@
-"""Releases — every UniFi release a synced console or device could update
-to, its AI risk rating and the GO/STOP recommendation, and the human
-decisions on top of it.
+"""Releases and their assessments.
 
-- `fabric.view`: list and open releases (only the pending updates in
-  Fabrics the account may see are listed with one), and follow any
-  version's release-notes link.
+- **Releases** (`/releases`) — the catalogue: every UniFi application's
+  newest versions from community.ui.com with their ratings, whether or not
+  anything synced runs them.
+- **Assessments** (`/assessments`) — every release a synced console or
+  device could update to, its AI risk rating and the GO/STOP
+  recommendation.
+- A release's page (`/releases/{id}`) — the rating, its sources, the
+  affected consoles and devices, and the human decisions on top of it.
+
+- `fabric.view`: all of the above (only the pending updates in Fabrics the
+  account may see are listed with a release), and any version's
+  release-notes link.
 - `release.manage`: ask for a re-assessment, set or clear a manual risk
   level (it replaces the AI's in every verdict).
 - `update.override`: allow a release whatever its risk level (every
@@ -25,31 +32,26 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, 
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.audit import log_event
 from app.auth.dependencies import get_current_user, require_permission
 from app.core.app_settings import get_or_create_app_settings
 from app.core.csrf import verify_csrf
-from app.db.models.console import Console
-from app.db.models.fabric import Fabric
+from app.db.models.console import Console, ConsoleApp
 from app.db.models.release import MAX_RISK_LEVEL, MIN_RISK_LEVEL, Release, ReleaseKind
 from app.db.models.role import Permission
 from app.db.models.user import User
 from app.db.session import get_db
 from app.releases.evidence import SourceError
 from app.releases.products import community_search_url, version_key
-from app.releases.service import assessment_model, product_label
-from app.releases.sources.community import SITE_URL, CommunityClient
-from app.releases.verdicts import (
-    TargetVerdict,
-    installed_keys,
-    load_latest,
-    load_releases,
-    max_risk_for,
-    update_targets,
-    verdicts,
+from app.releases.service import (
+    assessment_model,
+    catalog,
+    catalog_products,
+    product_label,
+    visible_verdicts,
 )
+from app.releases.sources.community import SITE_URL, CommunityClient
 from app.releases.versions import normalize_version
 from app.services.access_scope import fabrics_visible_to
 from app.tasks.release_jobs import assess_release
@@ -58,46 +60,60 @@ from app.web.templating import templates
 router = APIRouter(
     prefix="/releases", dependencies=[Depends(require_permission(Permission.FABRIC_VIEW))]
 )
+# The ratings of everything with a pending update ("Assessments"); until
+# 0.2.2 this list was `/releases`, which is now the catalogue.
+assessments_router = APIRouter(
+    prefix="/assessments", dependencies=[Depends(require_permission(Permission.FABRIC_VIEW))]
+)
 _manage = Depends(require_permission(Permission.RELEASE_MANAGE))
 _override = Depends(require_permission(Permission.UPDATE_OVERRIDE))
 
 _VALID_KINDS = {kind.value for kind in ReleaseKind}
 
 
-async def _visible_verdicts(db: AsyncSession, user: User) -> list[tuple[Fabric, TargetVerdict]]:
-    """Every pending update in the Fabrics `user` may see, with its verdict."""
-    app_settings = await get_or_create_app_settings(db)
-    query = await fabrics_visible_to(db, user)
-    fabrics = list(
-        (
-            await db.execute(
-                query.options(
-                    selectinload(Fabric.consoles).selectinload(Console.apps),
-                    selectinload(Fabric.consoles).selectinload(Console.devices),
-                ).order_by(Fabric.name)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    out: list[tuple[Fabric, TargetVerdict]] = []
-    for fabric in fabrics:
-        consoles = list(fabric.consoles)
-        latest = await load_latest(db, installed_keys(consoles))
-        targets = update_targets(consoles, latest)
-        releases = await load_releases(db, targets)
-        max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
-        out.extend((fabric, v) for v in verdicts(targets, releases, max_level))
-    return out
-
-
 @router.get("")
-async def list_releases(
+async def release_catalog(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Response:
-    pending = await _visible_verdicts(db, user)
+    """Every UniFi application's newest versions from community.ui.com
+    with their ratings, and how many consoles in the account's Fabrics run
+    each version."""
+    query = await fabrics_visible_to(db, user)
+    visible_ids = [f.id for f in (await db.execute(query)).scalars()]
+    installed: dict[tuple[str, str], int] = {}
+    if visible_ids:
+        rows = await db.execute(
+            select(ConsoleApp.name, ConsoleApp.version)
+            .join(Console, ConsoleApp.console_id == Console.id)
+            .where(Console.fabric_id.in_(visible_ids))
+        )
+        for name, version in rows.all():
+            normalized = normalize_version(version)
+            if normalized:
+                installed[(name, normalized)] = installed.get((name, normalized), 0) + 1
+    app_settings = await get_or_create_app_settings(db)
+    return templates.TemplateResponse(
+        request,
+        "releases/catalog.html",
+        {
+            "catalog": await catalog(db),
+            "titles": dict(catalog_products()),
+            "installed": installed,
+            "max_risk_level": app_settings.max_acceptable_risk_level,
+            "assessment_configured": await assessment_model(db, app_settings) is not None,
+        },
+    )
+
+
+@assessments_router.get("")
+async def list_assessments(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    pending = await visible_verdicts(db, user)
     counts: dict[uuid.UUID, dict[str, int]] = {}
     # The installed versions each release would replace — "6.0.11 → 6.0.17".
     current: dict[uuid.UUID, set[str]] = {}
@@ -119,7 +135,7 @@ async def list_releases(
     app_settings = await get_or_create_app_settings(db)
     return templates.TemplateResponse(
         request,
-        "releases/list.html",
+        "assessments/list.html",
         {
             "releases": releases,
             "counts": counts,
@@ -199,7 +215,7 @@ async def show_release(
     release = await _get_release_or_404(db, release_id)
     affected = [
         (fabric, verdict)
-        for fabric, verdict in await _visible_verdicts(db, user)
+        for fabric, verdict in await visible_verdicts(db, user)
         if verdict.release is not None and verdict.release.id == release.id
     ]
     app_settings = await get_or_create_app_settings(db)
@@ -238,7 +254,7 @@ async def request_assessment(
     if await assessment_model(db, app_settings) is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Release assessment is not configured (Settings → Releases).",
+            detail="Release assessment is not configured (Settings → Assessments).",
         )
     release.assessment_queued_at = datetime.now(UTC)
     await db.commit()
