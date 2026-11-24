@@ -86,3 +86,8 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    ignore:
+      # v2.6.0's Docker image is missing from ghcr.io, so the action can't
+      # run (see scorecard.yml). Drop this once a release after it works.
+      - dependency-name: "ossf/scorecard-action"
+        versions: ["2.6.0"]
