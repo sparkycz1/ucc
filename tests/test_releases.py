@@ -53,6 +53,11 @@ from app.tasks import release_jobs
     [
         ("UVC.SAV539g.v5.5.45.67.0dda191.261027.0534", "5.5.45"),
         ("1.4", "1.4"),
+        ("v1.4 build", "1.4"),
+        ("1.2..3", None),
+        (".5.5.51", None),
+        ("9" * 100000, None),
+        ("9." * 50000, "9.9.9"),
         ("5.5.51", "5.5.51"),
         ("6.0.17+701d2b2", "6.0.17"),
         ("10.6.111", "10.6.111"),
@@ -197,8 +202,6 @@ async def test_community_client_latest_on_the_firmware_line() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        import json
-
         term = json.loads(request.content)["variables"]["searchTerm"]
         calls.append(term)
         items = [
