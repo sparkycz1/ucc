@@ -7,7 +7,7 @@ requires-python = ">=3.14"
 license = { text = "PolyForm-Noncommercial-1.0.0" }
 
 dependencies = [
-    "fastapi>=0.141.1",
+    "fastapi>=0.165.0",
     "uvicorn[standard]>=0.52.4",
     # Lower bound is `openrouter`'s own ceiling (`pydantic>=2.11.2,<2.13`,
     # every 1.x release so far — see that dependency's own comment below),
@@ -15,11 +15,11 @@ dependencies = [
     # pydantic 2.13 added. `uv lock` currently resolves this to 2.12.x
     # because of that ceiling; the full test suite + `mypy --strict`-style
     # gate both pass at that version. Revisit once `openrouter` lifts it.
-    "pydantic>=2.11.2",
-    "pydantic-settings>=2.15.0",
+    "pydantic>=2.14.4",
+    "pydantic-settings>=2.16.3",
     "sqlalchemy[asyncio]>=2.0.52",
-    "asyncpg>=0.31.0",
-    "alembic>=1.19.1",
+    "asyncpg>=0.32.0",
+    "alembic>=1.20.1",
     # Note: the `redis-py` client library is independent from the Redis SERVER
     # version (8.10). It used to carry a hard `<6` cap here, purely because the
     # old task queue (arq) refused redis-py 6.x. That reason is gone: the queue
@@ -34,8 +34,8 @@ dependencies = [
     # app/tasks/celery_app.py and wiki/Architecture.md.
     "celery[redis]>=5.6.3",
     "jinja2>=3.1.6",
-    "python-multipart>=0.0.32",
-    "cryptography>=50.0.1",
+    "python-multipart>=0.0.34",
+    "cryptography>=50.0.2",
     "itsdangerous>=2.2.0",
     # Standard 5-field cron expression parsing/next-run computation for
     # Scheduling (app/scheduling/). Well-established, tiny, no transitive deps.
@@ -45,7 +45,7 @@ dependencies = [
     # (a Celery-ecosystem package pulls it in), promoted to direct since
     # this app now imports it itself rather than only relying on it
     # transitively.
-    "pyyaml>=6.0.3",
+    "pyyaml>=6.0.4",
     # --- Authentication (app/auth/) ---
     # Argon2id password hashing for local accounts — current OWASP-recommended
     # default, memory-hard (better GPU/ASIC resistance than bcrypt).
@@ -67,7 +67,7 @@ dependencies = [
     # --no-dev` fails to import app.main at all.
     "httpx>=0.28.1",
     # TOTP (RFC 6238) generation/verification for two-factor authentication.
-    "pyotp>=2.10.0",
+    "pyotp>=2.12.1",
     # Renders the TOTP enrollment QR code as inline SVG — deliberately used
     # without its optional Pillow/PNG extra, which isn't needed for that.
     "qrcode>=8.2",
@@ -86,7 +86,7 @@ dependencies = [
     # required. See `OpenAICompatibleClient`. NOT used for OpenRouter
     # (below) even though OpenRouter's API is also OpenAI-compatible — it
     # has its own dedicated SDK, which is what this app uses for it instead.
-    "openai>=3.6.0",
+    "openai>=3.57.0",
     # OpenRouter's own SDK — see `OpenRouterClient`. 1.x (declared "stable
     # as of v1.0") pins `pydantic<2.13`, hence this project's own pydantic
     # floor above; 1.x also changed `models.list_async`'s response shape
@@ -103,24 +103,24 @@ dependencies = [
     # its default escape=True (raw HTML in the source is escaped to text,
     # not passed through), so a runbook can't inject markup even though
     # only machine.manage accounts can edit one. See app.web.templating.
-    "mistune>=3.0.0",
+    "mistune>=3.4.0",
     # WebAuthn/passkey registration and authentication ceremony verification
     # (RP-side): attestation/assertion signature checking, challenge
     # handling. The de facto standard Python implementation (py_webauthn) —
     # see app/auth/webauthn.py. Pulls in cbor2 (CBOR decoding for
     # attestation objects) and pyOpenSSL (certificate chain validation for
     # attestation) as transitive dependencies.
-    "webauthn>=2.0.0",
+    "webauthn>=3.0.1",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
     "aiosqlite>=0.22.1",
-    "ruff>=0.16.4",
-    "mypy>=2.3.1",
-    "python-dotenv>=1.2.3",
+    "ruff>=0.17.6",
+    "mypy>=2.4.1",
+    "python-dotenv>=1.2.4",
     "types-authlib>=1.7.2.20260827",
     "types-croniter>=6.0.0",
     "types-ldap3>=2.9.13.20260827",
