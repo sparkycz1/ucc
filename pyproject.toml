@@ -1,6 +1,6 @@
 [project]
 name = "ucc"
-version = "0.1.2"
+version = "0.1.3"
 description = "UniFi Control Center — AI-gated management of UniFi firmware and application updates"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -122,6 +122,13 @@ dev = [
     "types-ldap3>=2.9.13.20260827",
     "types-qrcode>=8.2.0.20260518",
     "types-pyyaml>=6.0.12.20260826",
+]
+# Coverage-guided fuzzing (`fuzz/`, `.github/workflows/fuzz.yml`). Atheris
+# ships Linux wheels only and none for Python 3.15 yet, so the fuzz
+# workflow runs on 3.14; `tests/test_fuzz_targets.py` runs the same
+# targets without it on every OS and Python.
+fuzz = [
+    "atheris>=3.1.0 ; sys_platform == 'linux' and python_version < '3.15'",
 ]
 
 [tool.uv]

@@ -57,10 +57,12 @@ def test_parse_host_reads_os_and_app_versions():
     assert host.name == "HQ UDM"
     assert host.model == "UDMPRO"
     assert host.is_online is True
-    assert host.os_version == "4.1.13"
+    # UniFi OS is the hardware firmware version (what updates compare to);
+    # reportedState.version is a separate platform build.
+    assert host.os_version == "6.0.17"
+    assert host.core_version == "4.1.13"
     # `talk` is listed by Site Manager but not installed — not inventory.
     assert host.apps == [("network", "9.0.114", "9.1.120"), ("protect", "5.1.0", None)]
-    assert host.firmware_version == "6.0.17"
     assert host.auto_update_schedule == "weekly, day 0, 03:00"
     assert host.auto_update_include_apps is True
 

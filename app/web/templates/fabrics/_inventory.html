@@ -48,10 +48,10 @@
           <td>{{ console.os_version or '—' }}</td>
           <td>{% if console.os_update_available %}<span class="badge badge-warn">{{ console.os_update_available }}</span>{% else %}—{% endif %}</td>
         </tr>
-        {% if console.firmware_version %}
+        {% if console.core_version %}
         <tr>
-          <td>{{ t(request, "fabrics.table.console_firmware") }}</td>
-          <td>{{ console.firmware_version }}</td>
+          <td>{{ t(request, "fabrics.table.core_version") }}</td>
+          <td>{{ console.core_version }}</td>
           <td>—</td>
         </tr>
         {% endif %}

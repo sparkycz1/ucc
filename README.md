@@ -14,6 +14,7 @@
   <a href="https://github.com/sparkycz1/ucc/releases/latest"><img src="https://img.shields.io/github/v/release/sparkycz1/ucc?color=006fff" alt="Latest release"></a>
   <a href="https://github.com/sparkycz1/ucc/actions/workflows/ci.yml"><img src="https://github.com/sparkycz1/ucc/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/sparkycz1/ucc/actions/workflows/codeql.yml"><img src="https://github.com/sparkycz1/ucc/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+  <a href="https://github.com/sparkycz1/ucc/actions/workflows/fuzz.yml"><img src="https://github.com/sparkycz1/ucc/actions/workflows/fuzz.yml/badge.svg" alt="Fuzz"></a>
   <a href="https://github.com/sparkycz1/ucc/actions/workflows/scorecard.yml"><img src="https://github.com/sparkycz1/ucc/actions/workflows/scorecard.yml/badge.svg" alt="Scorecard"></a>
   <a href="https://github.com/sparkycz1/ucc/actions/workflows/release.yml"><img src="https://github.com/sparkycz1/ucc/actions/workflows/release.yml/badge.svg" alt="Release"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/sparkycz1/ucc"><img src="https://api.securityscorecards.dev/projects/github.com/sparkycz1/ucc/badge" alt="OpenSSF Scorecard"></a>
@@ -148,8 +149,8 @@ Everything lives in the **[wiki](https://github.com/sparkycz1/ucc/wiki)**:
 ## 🔒 Security
 
 Found a vulnerability? Please report it privately, see
-[SECURITY.md](.github/SECURITY.md). CI runs CodeQL, pip-audit and
-dependency review on every change; Dependabot keeps dependencies current.
+[SECURITY.md](.github/SECURITY.md). CI runs CodeQL, pip-audit,
+dependency review and fuzzing on every change; Dependabot keeps dependencies current.
 
 ## 🤝 Contributing
 

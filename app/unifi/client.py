@@ -40,9 +40,10 @@ class HostInfo:
     is_online: bool
     os_version: str | None
     os_update_available: str | None
-    # The console's own device firmware (`hardware.firmwareVersion`) — what
-    # Site Manager's device list reports for it, distinct from `os_version`.
-    firmware_version: str | None = None
+    # `reportedState.version` — a platform build number that is *not* what
+    # gets updated (it isn't comparable to `os_update_available`); shown as
+    # secondary "UniFi Core" information only.
+    core_version: str | None = None
     # UniFi's own automatic updates (`reportedState.autoUpdate`): a short
     # human-readable schedule ("weekly, day 0, 00:00") when one is set, and
     # whether it also updates applications. These run on UniFi's side,
@@ -78,15 +79,25 @@ class DeviceInfo:
     firmware_status: str | None = None
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    """`value` if it is a JSON object, else `{}` — a reply with a field of
+    the wrong type must not crash the whole Fabric's sync."""
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _str(value: Any) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
 def parse_host(raw: dict[str, Any]) -> HostInfo:
-    state = raw.get("reportedState") or {}
-    hardware = state.get("hardware") or {}
+    state = _dict(raw.get("reportedState"))
+    hardware = _dict(state.get("hardware"))
     apps: list[tuple[str, str | None, str | None]] = []
-    for controller in state.get("controllers") or []:
+    for controller in _list(state.get("controllers")):
         if not isinstance(controller, dict) or not controller.get("name"):
             continue
         # Site Manager lists every application the console *could* run
@@ -101,7 +112,7 @@ def parse_host(raw: dict[str, Any]) -> HostInfo:
                 _str(controller.get("updateAvailable")),
             )
         )
-    firmware_update = state.get("firmwareUpdate") or {}
+    firmware_update = _dict(state.get("firmwareUpdate"))
     auto_update = state.get("autoUpdate")
     return HostInfo(
         host_id=str(raw["id"]),
@@ -109,13 +120,12 @@ def parse_host(raw: dict[str, Any]) -> HostInfo:
         model=_str(hardware.get("shortname") or hardware.get("name")),
         ip_address=_str(raw.get("ipAddress") or state.get("ip")),
         is_online=str(state.get("state", "")).lower() == "connected",
-        os_version=_str(state.get("version") or hardware.get("firmwareVersion")),
-        os_update_available=_str(
-            firmware_update.get("latestAvailableVersion")
-            if isinstance(firmware_update, dict)
-            else None
-        ),
-        firmware_version=_str(hardware.get("firmwareVersion")),
+        # `hardware.firmwareVersion` is the UniFi OS version that updates:
+        # `firmwareUpdate.latestAvailableVersion` and Site Manager's device
+        # list (the console as a device) both compare against it.
+        os_version=_str(hardware.get("firmwareVersion") or state.get("version")),
+        os_update_available=_str(firmware_update.get("latestAvailableVersion")),
+        core_version=_str(state.get("version")),
         auto_update_schedule=_auto_update_schedule(auto_update),
         auto_update_include_apps=(
             bool(auto_update["includeApplications"])
@@ -145,7 +155,7 @@ def _auto_update_schedule(auto_update: Any) -> str | None:
 
 
 def parse_site(raw: dict[str, Any]) -> SiteInfo:
-    meta = raw.get("meta") or {}
+    meta = _dict(raw.get("meta"))
     return SiteInfo(
         site_id=str(raw["siteId"]),
         host_id=str(raw["hostId"]),
@@ -158,8 +168,8 @@ def parse_devices(raw: dict[str, Any]) -> list[DeviceInfo]:
     """One `/v1/devices` entry is a host with its `devices` list."""
     host_id = str(raw.get("hostId", ""))
     result: list[DeviceInfo] = []
-    for dev in raw.get("devices") or []:
-        if not isinstance(dev, dict) or not dev.get("mac"):
+    for dev in _list(raw.get("devices")):
+        if not isinstance(dev, dict) or not isinstance(dev.get("mac"), str) or not dev["mac"]:
             continue
         result.append(
             DeviceInfo(

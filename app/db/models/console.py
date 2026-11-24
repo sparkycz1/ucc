@@ -34,12 +34,13 @@ class Console(Base):
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # UniFi OS firmware.
+    # UniFi OS (`hardware.firmwareVersion`) and the update Site Manager
+    # offers for it.
     os_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     os_update_available: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # The console's own device firmware (`hardware.firmwareVersion`), as
-    # Site Manager's device list also reports it.
-    firmware_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # `reportedState.version` — a platform build number, not the version that
+    # updates (that is `os_version`); secondary information only.
+    core_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # UniFi's own automatic updates, as the console reports them. These run
     # on UniFi's side and bypass ucc's AI gate, so the UI warns about them;
