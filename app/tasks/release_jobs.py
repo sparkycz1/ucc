@@ -34,6 +34,7 @@ from app.ai.base import AiProviderError
 from app.ai.providers import build_client
 from app.ai.usage import check_within_limits, record_usage
 from app.core.app_settings import get_or_create_app_settings
+from app.core.config import get_settings
 from app.db import session as db_session
 from app.db.models.console import Console
 from app.db.models.fabric import Fabric
@@ -188,7 +189,7 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
         previous_level = release.effective_risk_level
         try:
             client = build_client(provider)
-            outcome = await assess(client, model.model_id, prompt)
+            outcome = await assess(client, model.model_id, prompt, get_settings().default_locale)
         except (AiProviderError, AssessmentError) as exc:
             release.assessment_error = str(exc)[:2000]
             await session.commit()
@@ -205,6 +206,7 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
         )
         result = outcome.result
         release.risk_level = result.risk_level
+        release.reason = result.reason or None
         release.summary = result.summary
         release.issues = [issue.model_dump() for issue in result.issues]
         release.sources = evidence.sources()
@@ -216,7 +218,7 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
         await session.commit()
 
         label = product_label(release)
-        details = result.summary
+        details = f"{result.reason}\n\n{result.summary}" if result.reason else result.summary
         await notify(
             session,
             NotificationEventType.RELEASE_ASSESSED,

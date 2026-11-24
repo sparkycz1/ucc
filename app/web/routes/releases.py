@@ -38,7 +38,7 @@ from app.db.models.role import Permission
 from app.db.models.user import User
 from app.db.session import get_db
 from app.releases.evidence import SourceError
-from app.releases.products import community_search_url
+from app.releases.products import community_search_url, version_key
 from app.releases.service import assessment_model, product_label
 from app.releases.sources.community import SITE_URL, CommunityClient
 from app.releases.verdicts import (
@@ -99,6 +99,8 @@ async def list_releases(
 ) -> Response:
     pending = await _visible_verdicts(db, user)
     counts: dict[uuid.UUID, dict[str, int]] = {}
+    # The installed versions each release would replace — "6.0.11 → 6.0.17".
+    current: dict[uuid.UUID, set[str]] = {}
     for _fabric, verdict in pending:
         if verdict.release is None:
             continue
@@ -106,6 +108,9 @@ async def list_releases(
         bucket["targets"] += 1
         if verdict.verdict == "stop":
             bucket["stop"] += 1
+        installed = normalize_version(verdict.target.current_version)
+        if installed:
+            current.setdefault(verdict.release.id, set()).add(installed)
     show_all = request.query_params.get("all") == "1"
     query = select(Release).order_by(Release.created_at.desc())
     if not show_all:
@@ -118,6 +123,10 @@ async def list_releases(
         {
             "releases": releases,
             "counts": counts,
+            "current_versions": {
+                release_id: sorted(versions, key=lambda v: version_key(v) or ())
+                for release_id, versions in current.items()
+            },
             "show_all": show_all,
             "max_risk_level": app_settings.max_acceptable_risk_level,
             "assessment_configured": await assessment_model(db, app_settings) is not None,

@@ -36,7 +36,7 @@
       {% if release.manual_note %}<p class="hint">{{ release.manual_note }}</p>{% endif %}
     {% endif %}
     {% if release.risk_level is not none %}
-      <p><strong>{{ t(request, "releases.risk." ~ release.risk_level) }}</strong></p>
+      <p><strong>{{ t(request, "releases.risk." ~ release.risk_level) }}{% if release.short_reason %}: {{ release.short_reason }}{% endif %}</strong></p>
     {% endif %}
     {% if release.summary %}<p>{{ release.summary }}</p>{% endif %}
     {% if release.issues %}
@@ -120,7 +120,7 @@
         <tr>
           <th>{{ t(request, "nav.fabrics") }}</th>
           <th>{{ t(request, "fabrics.table.device") }}</th>
-          <th>{{ t(request, "fabrics.table.version") }}</th>
+          <th>{{ t(request, "releases.table.from_to") }}</th>
           <th>{{ t(request, "releases.table.verdict") }}</th>
         </tr>
       </thead>
@@ -129,7 +129,7 @@
           <tr>
             <td><a href="/fabrics/{{ fabric.id }}">{{ fabric.name }}</a></td>
             <td>{{ verdict.target.label }}</td>
-            <td>{{ verdict.target.current_version | normalize_version or '—' }}</td>
+            <td class="nowrap">{{ version_link(release.kind, release.product, verdict.target.current_version | normalize_version) }} → {{ release.version }}</td>
             <td>{{ verdict_badge(verdict) }} <span class="hint">{{ t(request, "releases.max_level", level=verdict.max_risk_level) }}</span></td>
           </tr>
         {% endfor %}

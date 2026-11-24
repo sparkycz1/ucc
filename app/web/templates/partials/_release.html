@@ -13,11 +13,11 @@
   {%- endif -%}
 {%- endmacro %}
 
-{% macro risk_badge(level) -%}
+{% macro risk_badge(level, reason=none) -%}
   {%- if level is none -%}
     <span class="badge">{{ t(request, "releases.not_rated") }}</span>
   {%- else -%}
-    <span class="badge risk-{{ level }}" title="{{ t(request, 'releases.risk.' ~ level) }}">{{ t(request, "releases.risk_short", level=level) }}</span>
+    <span class="badge risk-{{ level }}" title="{{ t(request, 'releases.risk.' ~ level) }}{% if reason %}: {{ reason }}{% endif %}">{{ t(request, "releases.risk_short", level=level) }}</span>
   {%- endif -%}
 {%- endmacro %}
 
@@ -47,7 +47,10 @@
       {%- endif %}
       {{ verdict_badge(verdict) }}
       {%- if verdict.release is not none and verdict.release.effective_risk_level is not none %}
-        <a href="/releases/{{ verdict.release.id }}">{{ risk_badge(verdict.release.effective_risk_level) }}</a>
+        <a href="/releases/{{ verdict.release.id }}">{{ risk_badge(verdict.release.effective_risk_level, verdict.release.short_reason) }}</a>
+        {%- if verdict.release.short_reason and verdict.verdict == 'stop' %}
+        <span class="hint">{{ verdict.release.short_reason }}</span>
+        {%- endif %}
       {%- elif verdict.release is not none %}
         <a href="/releases/{{ verdict.release.id }}" class="hint">{{ t(request, "releases.details") }}</a>
       {%- endif %}

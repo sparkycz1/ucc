@@ -653,6 +653,8 @@
     "settings.releases.web_key": "API klíč Brave Search",
     "settings.releases.web_clear_key": "Odebrat uložený API klíč",
     "settings.releases.web_hint": "Najde hlášení mimo community.ui.com a Reddit. SearXNG musí mít zapnutý JSON výstup (search.formats: [html, json]).",
-    "releases.details": "podrobnosti"
+    "releases.details": "podrobnosti",
+    "releases.table.from_to": "Stávající → nová",
+    "releases.table.why": "Proč"
   }
 }
