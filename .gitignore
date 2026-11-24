@@ -40,3 +40,8 @@ docker-compose.override.yml
 
 # scripts/probe_connector.py output — contains your UniFi inventory
 probe_output/
+
+# Fuzzing: separate 3.14 environment and crash artifacts
+.venv-fuzz/
+crashes/
+crash-*

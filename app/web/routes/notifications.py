@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 
 from app.audit import log_event
 from app.auth.dependencies import get_current_user, require_permission
+from app.core import yaml_safety
 from app.core.app_settings import get_or_create_app_settings
 from app.core.csrf import get_or_create_csrf_token, set_csrf_cookie, verify_csrf
 from app.db.models.fabric import Fabric
@@ -693,7 +694,9 @@ async def import_rules(
         return response
 
     try:
-        parsed = yaml.safe_load(yaml_text)
+        # A rule export never uses anchors/aliases (no "billion laughs"),
+        # and nothing real is nested deeply — see app.core.yaml_safety.
+        parsed = yaml_safety.load(yaml_text, allow_aliases=False)
     except yaml.YAMLError as exc:
         return await _rerender([f"Invalid YAML: {exc}"], status.HTTP_422_UNPROCESSABLE_CONTENT)
 

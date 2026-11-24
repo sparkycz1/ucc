@@ -87,7 +87,7 @@ async def apply_inventory(db: AsyncSession, fabric: Fabric, inventory: Inventory
         console.is_online = host.is_online
         console.os_version = host.os_version
         console.os_update_available = host.os_update_available
-        console.firmware_version = host.firmware_version
+        console.core_version = host.core_version
         console.auto_update_schedule = host.auto_update_schedule
         console.auto_update_include_apps = host.auto_update_include_apps
         if host.is_online:

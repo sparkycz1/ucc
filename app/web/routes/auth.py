@@ -72,6 +72,7 @@ from app.db.models.webauthn_credential import WebAuthnCredential
 from app.db.session import get_db
 from app.i18n import available_locales, get_locale
 from app.schemas.user import MIN_PASSWORD_LENGTH, normalize_email
+from app.web.redirects import safe_local_path
 from app.web.templating import templates
 
 router = APIRouter()
@@ -110,10 +111,9 @@ async def _user_webauthn_credentials(
 
 def _safe_next(value: str | None) -> str:
     """Only ever follow a same-site, absolute path — never an attacker-
-    supplied external URL (`?next=https://evil.example`, an open redirect)."""
-    if value and value.startswith("/") and not value.startswith("//"):
-        return value
-    return "/"
+    supplied external URL (`?next=https://evil.example`, an open redirect).
+    See `app.web.redirects.safe_local_path` for every trick it refuses."""
+    return safe_local_path(value, "/")
 
 
 async def _render_login_password(

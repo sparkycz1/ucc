@@ -560,9 +560,9 @@
     "notifications.event.update_run_failed": "Aktualizace selhala",
     "fabrics.auto_update.warning": "UniFi tuto konzoli aktualizuje automaticky (UniFi OS, {schedule}) — mimo AI kontrolu ucc. Pokud má rozhodovat ucc, vypněte to v UniFi.",
     "fabrics.auto_update.warning_apps": "UniFi tuto konzoli i její aplikace aktualizuje automaticky ({schedule}) — mimo AI kontrolu ucc. Pokud má rozhodovat ucc, vypněte to v UniFi.",
-    "fabrics.table.console_firmware": "Firmware konzole",
     "fabrics.update_version_unknown": "dostupná",
     "fabrics.update_version_unknown_hint": "Site Manager hlásí aktualizaci, ale ne její verzi (často když je zařízení offline).",
-    "dashboard.stats.consoles_with_auto_update": "Konzolí s automatickým updatem UniFi (mimo ucc)"
+    "dashboard.stats.consoles_with_auto_update": "Konzolí s automatickým updatem UniFi (mimo ucc)",
+    "fabrics.table.core_version": "UniFi Core"
   }
 }

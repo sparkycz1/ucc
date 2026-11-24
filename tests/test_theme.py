@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 async def test_dashboard_defaults_to_dark_theme(client):
     response = await client.get("/dashboard")
@@ -73,3 +75,17 @@ async def test_theme_route_requires_a_session(anonymous_client):
         "/theme", data={"theme": "light", "next": "/dashboard", "csrf_token": "anything"}
     )
     assert response.status_code in (303, 401)
+
+
+@pytest.mark.parametrize("target", ["/\\evil.example", "/\t/evil.example", "/\n/evil.example"])
+async def test_backslash_and_control_character_redirect_tricks_are_rejected(client, target):
+    """Browsers read `/\\host` and `/<tab>/host` as `//host` — another site."""
+    await client.get("/dashboard")
+    csrf_token = client.cookies.get("csrftoken")
+    response = await client.post(
+        "/theme",
+        data={"theme": "light", "next": target, "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard"

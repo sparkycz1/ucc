@@ -560,9 +560,9 @@
     "notifications.event.update_run_failed": "Update failed",
     "fabrics.auto_update.warning": "UniFi updates this console automatically (UniFi OS, {schedule}) — outside ucc's AI gate. Turn it off in UniFi if ucc should decide.",
     "fabrics.auto_update.warning_apps": "UniFi updates this console and its applications automatically ({schedule}) — outside ucc's AI gate. Turn it off in UniFi if ucc should decide.",
-    "fabrics.table.console_firmware": "Console firmware",
     "fabrics.update_version_unknown": "available",
     "fabrics.update_version_unknown_hint": "Site Manager reports an update but not its version (often while the device is offline).",
-    "dashboard.stats.consoles_with_auto_update": "Consoles with UniFi auto-update (bypasses ucc)"
+    "dashboard.stats.consoles_with_auto_update": "Consoles with UniFi auto-update (bypasses ucc)",
+    "fabrics.table.core_version": "UniFi Core"
   }
 }
