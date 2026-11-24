@@ -25,6 +25,7 @@
       {% if current_user.has_permission('fabric.view') %}
         <a href="/fabrics" {% if current_path.startswith('/fabrics') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.fabrics") }}</a>
         <a href="/releases" {% if current_path.startswith('/releases') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.releases") }}</a>
+        <a href="/assessments" {% if current_path.startswith('/assessments') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.assessments") }}</a>
       {% endif %}
       {% if current_user.has_permission('scheduling.view') %}
         <a href="/scheduling" {% if current_path.startswith('/scheduling') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.scheduling") }}</a>

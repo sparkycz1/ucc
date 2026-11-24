@@ -1,7 +1,7 @@
 """General web search — forum threads, blog posts and bug trackers outside
 community.ui.com and Reddit.
 
-Two backends, both optional (Settings → Releases):
+Two backends, both optional (Settings → Assessments):
 
 - **SearXNG** — a self-hosted metasearch instance (its JSON output must be
   enabled: `search.formats: [html, json]` in its settings.yml). No key.

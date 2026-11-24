@@ -12,8 +12,11 @@ a one-line `asyncio.run(...)` wrapper, sessions come from
 - `assess_release(release_id)` — gather evidence, ask the model, store
   the rating, notify.
 - `reassess_releases()` — daily Beat sweep: early ratings are made on
-  little feedback, so a release with pending updates is re-rated once a
-  day for its first 30 days.
+  little feedback, so a release with pending updates (or in the Releases
+  catalogue) is re-rated once a day for its first 30 days.
+- `refresh_release_catalog()` — Beat, every 6 hours: the newest three
+  versions of every UniFi application from community.ui.com, for the
+  Releases page, each new one enqueued for assessment.
 
 Unattended, so not audit-logged (CLAUDE.md); a human asking for a
 re-assessment is audit-logged by the web route that enqueues it.
@@ -43,9 +46,13 @@ from app.db.models.release import Release
 from app.releases.assess import AssessmentError, assess, build_prompt
 from app.releases.service import (
     assessment_model,
+    catalog,
+    claim_unrated,
     ensure_releases,
     gather_evidence,
+    parse_time,
     product_label,
+    refresh_catalog,
     refresh_latest,
 )
 from app.releases.verdicts import (
@@ -68,7 +75,6 @@ logger = logging.getLogger(__name__)
 # 60 s task limit (`app.tasks.celery_app`).
 ASSESSMENT_TIME_LIMIT_SECONDS = 300
 REASSESS_AFTER = timedelta(hours=24)
-REQUEUE_AFTER = timedelta(hours=1)
 REASSESS_WINDOW = timedelta(days=30)
 
 
@@ -83,28 +89,14 @@ async def load_consoles(session: Any, fabric_id: uuid.UUID) -> list[Console]:
 
 
 async def _claim_unrated(session: Any, targets: list[UpdateTarget]) -> list[str]:
-    """Ids of the targets' releases that have never been rated and are not
-    already queued, marked as queued. Several Fabrics syncing at once all
-    see the same new release; the mark keeps it to one assessment (and an
-    assessment that keeps failing to one retry per `REQUEUE_AFTER`)."""
+    """The targets' releases, claimed for assessment (`claim_unrated`)."""
     keys = {t.key for t in targets if t.key is not None}
-    now = datetime.now(UTC)
-    claimed = []
-    for release in (await load_releases(session, targets)).values():
-        if (release.kind, release.product, release.version) not in keys:
-            continue
-        if release.assessed_at is not None or release.manual_risk_level is not None:
-            continue
-        queued = release.assessment_queued_at
-        if queued is not None and _aware(queued) > now - REQUEUE_AFTER:
-            continue
-        release.assessment_queued_at = now
-        claimed.append(str(release.id))
-    return claimed
-
-
-def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    releases = [
+        release
+        for release in (await load_releases(session, targets)).values()
+        if (release.kind, release.product, release.version) in keys
+    ]
+    return claim_unrated(releases)
 
 
 async def _discover_releases(fabric_id: str) -> dict[str, Any]:
@@ -177,7 +169,7 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
             release.community_release_id = evidence.release.id
             release.community_url = evidence.release.url
             release.stage = evidence.release.stage
-            release.published_at = _parse_time(evidence.release.created_at)
+            release.published_at = parse_time(evidence.release.created_at)
 
         prompt = build_prompt(
             label=product_label(release),
@@ -253,16 +245,6 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
     return {"ok": True, "risk_level": result.risk_level}
 
 
-def _parse_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
 @celery_app.task(
     name="app.tasks.release_jobs.assess_release", time_limit=ASSESSMENT_TIME_LIMIT_SECONDS
 )
@@ -272,8 +254,9 @@ def assess_release(release_id: str) -> dict[str, Any]:
 
 async def _reassess_releases(now: datetime | None = None) -> int:
     """Enqueue a re-assessment of every release that still has a pending
-    update somewhere, was last rated over a day ago, and is young enough
-    for its community feedback to still be changing."""
+    update somewhere or is in the Releases catalogue, was last rated over a
+    day ago, and is young enough for its community feedback to still be
+    changing."""
     now = now or datetime.now(UTC)
     async with db_session.AsyncSessionLocal() as session:
         app_settings = await get_or_create_app_settings(session)
@@ -307,6 +290,9 @@ async def _reassess_releases(now: datetime | None = None) -> int:
             consoles = await load_consoles(session, fabric_id)
             latest = await load_latest(session, installed_keys(consoles))
             pending.update(t.key for t in update_targets(consoles, latest) if t.key is not None)
+        # The Releases page's catalogue is rated even with nothing pending.
+        for rows in (await catalog(session)).values():
+            pending.update((r.kind, r.product, r.version) for r in rows)
         ids = [str(r.id) for r in candidates if (r.kind, r.product, r.version) in pending]
     for release_id in ids:
         assess_release.delay(release_id)
@@ -316,3 +302,24 @@ async def _reassess_releases(now: datetime | None = None) -> int:
 @celery_app.task(name="app.tasks.release_jobs.reassess_releases")
 def reassess_releases() -> None:
     asyncio.run(_reassess_releases())
+
+
+async def _refresh_release_catalog() -> dict[str, Any]:
+    """Beat, every 6 hours: the newest versions of every UniFi application
+    from community.ui.com (the Releases page), each never-rated one
+    enqueued for assessment when a model is configured."""
+    async with db_session.AsyncSessionLocal() as session:
+        rows = await refresh_catalog(session)
+        app_settings = await get_or_create_app_settings(session)
+        to_assess = (
+            claim_unrated(rows) if await assessment_model(session, app_settings) else []
+        )
+        await session.commit()
+    for release_id in to_assess:
+        assess_release.delay(release_id)
+    return {"ok": True, "catalog": len(rows), "queued": len(to_assess)}
+
+
+@celery_app.task(name="app.tasks.release_jobs.refresh_release_catalog")
+def refresh_release_catalog() -> dict[str, Any]:
+    return asyncio.run(_refresh_release_catalog())

@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% from "partials/_release.html" import version_link, risk_badge with context %}
+{% from "partials/_release.html" import version_link, risk_badge, source_links with context %}
 
-{% block title %}{{ t(request, "nav.releases") }} — ucc{% endblock %}
+{% block title %}{{ t(request, "nav.assessments") }} — ucc{% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>{{ t(request, "nav.releases") }}</h1>
+    <h1>{{ t(request, "nav.assessments") }}</h1>
     <div class="page-header-actions">
       {% if show_all %}
-        <a class="button button-secondary" href="/releases">{{ t(request, "releases.show_pending") }}</a>
+        <a class="button button-secondary" href="/assessments">{{ t(request, "releases.show_pending") }}</a>
       {% else %}
-        <a class="button button-secondary" href="/releases?all=1">{{ t(request, "releases.show_all") }}</a>
+        <a class="button button-secondary" href="/assessments?all=1">{{ t(request, "releases.show_all") }}</a>
       {% endif %}
     </div>
   </div>
@@ -33,6 +33,7 @@
         <th>{{ t(request, "releases.table.stage") }}</th>
         <th>{{ t(request, "releases.table.risk") }}</th>
         <th>{{ t(request, "releases.table.why") }}</th>
+        <th>{{ t(request, "releases.sources") }}</th>
         <th>{{ t(request, "releases.table.pending") }}</th>
         <th>{{ t(request, "releases.table.assessed") }}</th>
       </tr>
@@ -57,6 +58,7 @@
             {% if release.is_allowed %}<span class="badge badge-ok">{{ t(request, "releases.allowed") }}</span>{% endif %}
           </td>
           <td>{{ release.short_reason or '—' }}</td>
+          <td>{{ source_links(release) }}</td>
           <td>
             {% if count %}
               {{ count.targets }}

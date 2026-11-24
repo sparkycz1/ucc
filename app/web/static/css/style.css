@@ -701,6 +701,7 @@ p { margin: 0 0 var(--space-3); }
 .risk-4, .risk-5 { background: rgba(240, 104, 95, 0.16); color: var(--color-danger); }
 .risk-5 { font-weight: 700; }
 .nowrap { white-space: nowrap; }
+.source-links { display: inline-flex; flex-wrap: wrap; gap: 0.5rem; }
 .update-target { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
 
 /* A machine tag (app.db.models.machine_tag) — neutral color since a tag
