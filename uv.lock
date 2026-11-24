@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1649,11 +1649,11 @@ wheels = [
 
 [[package]]
 name = "types-croniter"
-version = "6.2.4.20260711"
+version = "6.2.4.20261118"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c0/e1/ef8900515a103efa41b29ce81e59efb18e72bc9642139c5a3a17f6022641/types_croniter-6.2.4.20260711.tar.gz", hash = "sha256:807793e109f4e0d51ec18f6277a1a5f1d133e425ac6bee3a7c3254ab1793e0ea", size = 12164, upload-time = "2026-07-11T04:51:18.624Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/a0/ac6aac0121183b71628fe052468dc29838306227c2419a884f2491ba05ad/types_croniter-6.2.4.20261118.tar.gz", hash = "sha256:55659930b26651996e45d8cfc715d158aab1bd55767c808425a0a0e39cf9a8cf", size = 12396, upload-time = "2026-11-18T09:23:09.241Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/3f/896a98180a55f855bd068b97e8c99fd4ce1885a4b43f68fd7b29641084f6/types_croniter-6.2.4.20260711-py3-none-any.whl", hash = "sha256:601b68139a47fe1b2177f433132cc81fd91155f3059a49c5cb63404c389dff01", size = 9746, upload-time = "2026-07-11T04:51:17.662Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/48/a0686a5ab06c53b093b45fe34511833c06480f601766ebfb2dd42b25b7c9/types_croniter-6.2.4.20261118-py3-none-any.whl", hash = "sha256:9f8d047dd354956f098516bb3ead71bc04e693a947f2717f5684a5e046e3bff0", size = 9789, upload-time = "2026-11-18T09:23:08.219Z" },
 ]
 
 [[package]]
@@ -1829,7 +1829,7 @@ dev = [
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "ruff", specifier = ">=0.16.4" },
     { name = "types-authlib", specifier = ">=1.7.2.20260827" },
-    { name = "types-croniter", specifier = ">=6.0.0" },
+    { name = "types-croniter", specifier = ">=6.2.4.20261118" },
     { name = "types-ldap3", specifier = ">=2.9.13.20260827" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260826" },
     { name = "types-qrcode", specifier = ">=8.2.0.20260518" },
