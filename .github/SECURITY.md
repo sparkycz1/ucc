@@ -20,10 +20,10 @@ Include, if known:
 
 ## Scope
 
-This is a self-hosted admin tool for managing Debian/Ubuntu machines over SSH — the threat model and existing safeguards are documented in the wiki:
+This is a self-hosted admin tool that stores UniFi Site Manager API keys and — through the Site Manager connector proxy — may trigger updates on real UniFi networks. The threat model and existing safeguards are documented in the wiki:
 
-- [Architecture → Security essentials](../wiki/Architecture.md#-security-essentials) — CSRF, HTTP headers, startup validation, container hardening, plus links to [Authentication & RBAC](../wiki/Authentication-RBAC.md), [Machine Management](../wiki/Machine-Management.md) (SSH host key pinning, secrets at rest), and [Audit Log](../wiki/Audit-Log.md).
-- [AI Assistant](../wiki/AI-Assistant.md) — the confirm-before-execute rule, permission model, and the residual prompt-injection risk it deliberately does not eliminate.
-- [SSH Host Key Verification](../wiki/SSH-Host-Key-Verification.md) — why there's no trust-on-first-use.
+- [Architecture → Security essentials](https://github.com/sparkycz1/ucc/wiki/Architecture#-security-essentials) — CSRF, HTTP headers, startup validation, container hardening, secrets at rest, plus [Authentication & RBAC](https://github.com/sparkycz1/ucc/wiki/Authentication-RBAC) (roles, per-account Fabric scope) and [Audit Log](https://github.com/sparkycz1/ucc/wiki/Audit-Log).
+- [UniFi Integration](https://github.com/sparkycz1/ucc/wiki/UniFi-Integration) — how API keys are validated, stored and never rendered back, and what reaches UniFi.
+- [AI Assistant](https://github.com/sparkycz1/ucc/wiki/AI-Assistant) — its read-only tools, permission model, and the residual prompt-injection risk.
 
 Dependency vulnerabilities are tracked automatically via [Dependabot](dependabot.yml) (alerts and security updates are enabled on this repository).

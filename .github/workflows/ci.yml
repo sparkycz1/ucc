@@ -1,6 +1,6 @@
 name: CI
 
-# The exact gate wiki/Development.md documents for a local commit — ruff,
+# The exact gate wiki/Development documents for a local commit — ruff,
 # mypy, the full test suite (in-memory SQLite, no real Postgres/Redis/
 # Celery broker needed, see tests/conftest.py), and a single-alembic-head
 # check — now also enforced here so a PR can't merge without it.
@@ -16,14 +16,36 @@ on:
     branches: [main]
   pull_request:
 
+# Repeated per-job below alongside whatever extra scope that job actually
+# needs — a workflow-level block doesn't grant anything on its own, but
+# OpenSSF Scorecard's Token-Permissions check flags a workflow with no
+# top-level permissions block at all, even when nothing in it needs write
+# access.
+permissions:
+  contents: read
+
+# A new push to a PR cancels the checks of the commit it replaces (they'd
+# only hold runners the new run needs). Pushes to main are never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Pinned to an exact commit SHA, not a mutable tag (the version stays
+      # as a trailing comment) — Scorecard's Pinned-Dependencies check flags
+      # a tag as "not pinned" since it can be force-moved to point at
+      # different code later. Dependabot still bumps these (it understands
+      # the `uses: action@<sha>  # vX.Y.Z` pattern and updates both together).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          # Downloaded wheels cached between runs (keyed on uv.lock).
+          enable-cache: true
 
       - name: Install Python 3.14
         run: uv python install 3.14
@@ -54,29 +76,96 @@ jobs:
           echo "$heads"
           count="$(grep -c '(head)' <<< "$heads")"
           if [ "$count" -ne 1 ]; then
-            echo "::error::Expected exactly one alembic head, found $count — see wiki/Development.md."
+            echo "::error::Expected exactly one alembic head, found $count — see wiki/Development."
             exit 1
           fi
+
+  postgres:
+    # The migrations against a real Postgres (native enum types the SQLite
+    # test suite can't see): upgrade a fresh database, check the models
+    # match it exactly, downgrade to empty, and upgrade again.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-dummy-postgres-password
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://ci:ci-dummy-postgres-password@localhost:5432/ci
+      SECRET_KEY: ci-dummy-secret-key-not-a-real-value
+      ENCRYPTION_KEY: IYH8EiMlmjkDacPXmvWQgDjTojLMD6GDwD8STyL1x0Y=
+      POSTGRES_PASSWORD: ci-dummy-postgres-password
+      REDIS_PASSWORD: ci-dummy-redis-password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          # Downloaded wheels cached between runs (keyed on uv.lock).
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Migrate a fresh database
+        run: uv run alembic upgrade head
+
+      - name: Models match the migrations
+        run: uv run alembic check
+
+      - name: Downgrade to empty and upgrade again
+        run: |
+          uv run alembic downgrade base
+          uv run alembic upgrade head
 
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          # Downloaded wheels cached between runs (keyed on uv.lock).
+          enable-cache: true
 
       - name: Install Python 3.14
         run: uv python install 3.14
 
-      # Known-CVE scan of exactly what uv.lock would actually install —
-      # separate from Dependabot (which watches for *newer* fixed versions
-      # existing at all) in that this fails the build the moment a
-      # vulnerable version is pinned, rather than waiting for a PR.
+      # Known-CVE scan of everything uv.lock pins — separate from Dependabot
+      # (which watches for *newer* fixed versions existing at all) in that
+      # this fails the build the moment a vulnerable version is pinned,
+      # rather than waiting for a PR. Every dependency group, not just the
+      # app's own: the dev/test tools run in CI with its token, and
+      # OpenSSF Scorecard's "Vulnerabilities" check (code scanning) reads
+      # the whole lock file too, so a dev-only CVE would otherwise show up
+      # there as an alert while this job stays green.
       - name: Export locked dependencies
-        run: uv export --frozen --no-hashes --no-dev -o requirements-audit.txt
+        run: uv export --frozen --no-hashes --all-groups -o requirements-audit.txt
 
       # `uvx` runs pip-audit in its own throwaway environment — never
       # touches uv.lock or this project's own venv.
       - name: pip-audit (known CVEs in locked dependencies)
-        run: uvx pip-audit --strict -r requirements-audit.txt
+        run: uvx pip-audit@2.10.1 --strict -r requirements-audit.txt
+  dependency-review:
+    # Only meaningful on a PR — it diffs the base branch against the PR's
+    # head to flag what a PR specifically *introduces* (a newly-added
+    # vulnerable version, or a dependency under a license this project
+    # can't use), which pip-audit's plain "scan uv.lock as it is right
+    # now" doesn't distinguish from something already there before.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec  # v5.0.1

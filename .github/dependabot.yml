@@ -1,31 +1,88 @@
 version: 2
 
+# Every ecosystem below is grouped: one PR per ecosystem and week instead of
+# one per package. main only merges branches that are up to date and freshly
+# checked, so a dozen single-package PRs each had to be rebased and re-run in
+# turn — and actions that must move together (codeql-action's init, analyze
+# and upload-sarif) failed CI when bumped alone. A major version still gets
+# its own PR, so a breaking upgrade never hides inside a routine batch.
+#
+# `cooldown`: a new release is only proposed once it is a few days old, so a
+# compromised or broken release that gets yanked quickly never reaches a PR.
+# Security updates (Dependabot alerts) ignore the cooldown and come at once.
+
 updates:
   # Python dependencies (pyproject.toml + the committed uv.lock).
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 15
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    groups:
+      python:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
-  # Base images pinned in Dockerfile, plus the image tags in
-  # docker-compose.yml / docker-compose.caddy.yml (postgres, redis, caddy).
+  # Base images pinned in the Dockerfile.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 15
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    groups:
+      docker:
+        patterns: ["*"]
+    ignore:
+      # Python's own image only gets patch releases (3.14.7 -> 3.14.8).
+      # Dependabot reads a tag like `3.15.0a1-slim` as an ordinary newer
+      # version, so without this it proposes alphas, betas and release
+      # candidates of the next Python. Moving to a new Python minor
+      # version is done by hand once it is stable and every dependency has
+      # a wheel for it — never by Dependabot.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  # No workflows exist yet, but this keeps any future GitHub Actions
-  # pinned-version usage covered from day one instead of being forgotten.
+  # The image tags in docker-compose.yml
+  # (postgres, redis, caddy) — a separate ecosystem: "docker" above only
+  # reads Dockerfiles.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      docker-compose:
+        patterns: ["*"]
+
+  # Every action pinned by SHA (with the version kept as a trailing
+  # comment, e.g. `uses: actions/checkout@<sha>  # v7`) across every
+  # workflow file under .github/workflows/ — `directory: "/"` already
+  # covers all of them, Dependabot understands that comment convention
+  # well enough to bump both the SHA and its comment together.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 15
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    groups:
+      github-actions:
+        patterns: ["*"]

@@ -11,8 +11,8 @@ secret (`SECRET_KEY`, `ENCRYPTION_KEY`, `POSTGRES_PASSWORD`,
 asks a handful of questions (timezone, the default UI language for
 accounts that haven't picked one for themselves, whether to use the
 bundled Caddy reverse proxy and its domain/email if so, whether the app's
-own port should only accept local connections, the two background-check
-intervals, the Administrator account's password — or auto-generates one —
+own port should only accept local connections, the Administrator
+account's password — or auto-generates one —
 and the host port to publish), writes `.env`, brings the stack up with
 `docker compose`, waits for the app to become healthy, and creates the
 first Administrator account.
@@ -328,14 +328,6 @@ def main() -> None:
         lines,
         "APP_BIND_ADDRESS",
         "127.0.0.1" if localhost_only else "0.0.0.0",  # noqa: S104 - explicit user choice, not a default
-    )
-
-    print()
-    facts_interval = _prompt("Facts refresh interval, in seconds", default="3600")
-    reachability_interval = _prompt("Reachability check interval, in seconds", default="60")
-    lines = _set_env_line(lines, "FACTS_REFRESH_INTERVAL_SECONDS", facts_interval)
-    lines = _set_env_line(
-        lines, "REACHABILITY_CHECK_INTERVAL_SECONDS", reachability_interval
     )
 
     print()

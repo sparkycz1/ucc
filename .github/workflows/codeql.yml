@@ -1,0 +1,59 @@
+name: CodeQL
+
+# Static security and code-quality analysis (SQL injection, XSS, SSRF, path
+# traversal, unsafe deserialization, ... plus the `security-and-quality`
+# maintainability queries) of the Python app, its own JavaScript and the
+# GitHub Actions workflows themselves — a different class of check from the
+# `security` job in ci.yml, which only scans *dependencies* (pip-audit)
+# for known CVEs, not this app's own code. Results show up under the
+# repo's Security -> Code scanning tab.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Catches a new query/rule CodeQL itself ships, against code that
+    # hasn't changed — a plain push/PR trigger alone would never re-scan
+    # unchanged code once merged.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels the analysis of the commit it replaces.
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    # Job-level permissions replace, not add to, the workflow-level ones
+    # above — contents:read has to be repeated here alongside the
+    # security-events:write this job actually needs (uploading its SARIF
+    # results), or checkout itself would have no read access.
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # `actions` = the workflow files (injection, over-broad token
+        # permissions, untrusted checkouts); none of the three needs a build.
+        language: [python, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066  # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended,security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066  # v4.39.3
+        with:
+          category: "/language:${{ matrix.language }}"

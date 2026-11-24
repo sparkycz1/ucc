@@ -21,23 +21,23 @@ itself).
 **The wiki is the primary source of truth, not this file** — it is
 detailed, current, and actively maintained alongside the code:
 
-- **[wiki/Development.md](wiki/Development.md)** — commands, testing
+- **[wiki/Development](https://github.com/sparkycz1/ucc/wiki/Development)** — commands, testing
   conventions, and step-by-step recipes for the most common changes
   (adding a route, a permission, a scheduled action, a background task,
   an audit log call). Read the relevant recipe before adding one of
   these rather than improvising a new pattern.
-- **[wiki/Architecture.md](wiki/Architecture.md)** — stack, project
+- **[wiki/Architecture](https://github.com/sparkycz1/ucc/wiki/Architecture)** — stack, project
   structure, and cross-cutting security essentials (CSRF/CSP/headers,
   startup validation, container hardening). Feature-specific depth lives
   in its own page from there: **[Authentication &
-  RBAC](wiki/Authentication-RBAC.md)** (logins, sessions, permissions,
-  Fabric scope), **[UniFi Integration](wiki/UniFi-Integration.md)**
+  RBAC](https://github.com/sparkycz1/ucc/wiki/Authentication-RBAC)** (logins, sessions, permissions,
+  Fabric scope), **[UniFi Integration](https://github.com/sparkycz1/ucc/wiki/UniFi-Integration)**
   (Fabrics, inventory sync, connector proxy, the AI-gated update roadmap),
-  **[Audit Log](wiki/Audit-Log.md)**, and
-  **[Notifications](wiki/Notifications.md)** (rules, templates, every
+  **[Audit Log](https://github.com/sparkycz1/ucc/wiki/Audit-Log)**, and
+  **[Notifications](https://github.com/sparkycz1/ucc/wiki/Notifications)** (rules, templates, every
   placeholder). Read the relevant page before changing something it
   documents, rather than guessing from the code alone.
-- **[wiki/Home.md](wiki/Home.md)** — the feature table (what every page
+- **[wiki/Home](https://github.com/sparkycz1/ucc/wiki/Home)** — the feature table (what every page
   does), the canonical wiki table of contents.
 
 When a task touches something these already document, follow the existing
@@ -61,7 +61,7 @@ uv run alembic heads             # must show exactly one head before committing 
 
 There is no supported way to run the app itself outside Docker:
 `docker compose up -d --build` (or `python3 scripts/setup.py` for a guided
-first-time setup). See [wiki/Installation.md](wiki/Installation.md).
+first-time setup). See [wiki/Installation](https://github.com/sparkycz1/ucc/wiki/Installation).
 
 **Before committing**, run the same gate this repo's history consistently
 uses: `ruff check .`, `mypy app alembic tests`, `pytest`, `alembic heads`
@@ -135,7 +135,7 @@ history around v0.19.0/v0.19.1).
   not imported there is invisible to `--autogenerate`.
 - **UI strings go through `t()`, not literal English in a template.**
   `{{ t(request, "area.key") }}` (`app/web/templating.py`, backed by
-  `app/i18n/`) resolves per-account — see [Per-user UI language](wiki/Authentication-RBAC.md#per-user-ui-language-i18n).
+  `app/i18n/`) resolves per-account — see [Per-user UI language](https://github.com/sparkycz1/ucc/wiki/Authentication-RBAC#per-user-ui-language-i18n).
   Not every page is converted yet; a page that already uses `t()` should
   stay consistent, and any new key needs an entry in **every** file under
   `app/i18n/locales/`, not just `en.json` (see the checklist below).
@@ -147,12 +147,18 @@ Before considering a change finished, not just "the code works":
 1. **No REST API.** A new capability is web-UI-only (see above). If it
    ever needs machine-to-machine access, that is a design decision to raise
    with the user, not something to add in passing.
-2. **Wiki parity.** Update the relevant `wiki/*.md` page(s) in the same
-   change — `wiki/Home.md`'s feature table, `wiki/Architecture.md` for
-   *why*/how it works, `wiki/Development.md` if it adds a new pattern
-   worth a recipe. Code and docs drifting apart is treated as a bug here,
-   not a nice-to-have (see git history — a dedicated audit pass exists
-   specifically because this had already happened).
+2. **Wiki parity.** The wiki is **only** the live GitHub wiki
+   (https://github.com/sparkycz1/ucc/wiki) — its own git repo
+   (`git clone https://github.com/sparkycz1/ucc.wiki.git`), not a folder
+   in this one. Update the relevant page(s) in the same round of work —
+   `Home`'s feature table, `Architecture` for *why*/how it works,
+   `UniFi-Integration` for anything touching Site Manager, `Development`
+   if it adds a new pattern worth a recipe — and push the wiki repo when
+   the change lands. Inside the wiki, link another page without `.md`
+   (`[Architecture](Architecture#anchor)`; with `.md` GitHub opens the raw
+   source), and link a file of *this* repo with its full
+   `https://github.com/sparkycz1/ucc/blob/main/...` URL. Code and docs
+   drifting apart is treated as a bug here, not a nice-to-have.
 3. **i18n parity.** Any new or changed user-facing string goes through
    `t(request, "...")` and gets a key in `app/i18n/locales/en.json` *and*
    every other locale file already shipping (`cs.json` today) — not just
@@ -175,7 +181,7 @@ Before considering a change finished, not just "the code works":
    CSRF on every mutating web route, the exact matching `Permission` on
    both the web and API side, secrets only ever `encrypt_secret`/stored
    hashed, no new inline script/style (CSP), no new trust boundary crossed
-   without the same scrutiny `wiki/Architecture.md`'s security model
+   without the same scrutiny `Architecture`'s security model (wiki)
    section already applies elsewhere.
 6. **Current, not legacy, tech.** Match what's already here (Python 3.14,
    SQLAlchemy 2.0 async, Pydantic v2, FastAPI, htmx 2.x) — don't introduce
