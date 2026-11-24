@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "notifications.rule.edit_title") if rule else t(request, "notifications.rule.new_title") }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "notifications.rule.edit_title") if rule else t(request, "notifications.rule.new_title") }}</h1>
+
+  {% if errors %}
+    <div class="alert alert-error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  <form method="post"
+        action="{{ '/notifications/rules/' ~ rule.id ~ '/edit' if rule else '/notifications/rules' }}"
+        class="form form-wide" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <div class="panel">
+      <h2>{{ t(request, "notifications.rule.section_basics") }}</h2>
+
+      <label for="name">{{ t(request, "notifications.rule.name_label") }}</label>
+      <input type="text" id="name" name="name" required maxlength="255" value="{{ form.name or '' }}">
+
+      <label for="description">{{ t(request, "notifications.rule.description_label") }}</label>
+      <textarea id="description" name="description" rows="2">{{ form.description or '' }}</textarea>
+
+      <label>
+        <input type="checkbox" name="enabled" {{ 'checked' if form.enabled else '' }}>
+        {{ t(request, "notifications.rule.enabled_label") }}
+      </label>
+    </div>
+
+    <div class="panel">
+      <h2>{{ t(request, "notifications.rule.section_trigger") }}</h2>
+      <p class="hint">{{ t(request, "notifications.rule.trigger_hint") }}</p>
+
+      <label>{{ t(request, "notifications.rule.events_label") }}</label>
+      <div class="permission-grid">
+        {% for event in event_types %}
+          <label>
+            <input type="checkbox" name="event_types" value="{{ event.value }}"
+                   {{ 'checked' if event.value in selected_event_types else '' }}>
+            {{ t(request, "notifications.event." ~ event.name | lower) }}
+          </label>
+        {% endfor %}
+      </div>
+
+    </div>
+
+    <div class="panel">
+      <h2>{{ t(request, "notifications.rule.section_delivery") }}</h2>
+
+      {% if test_sent %}
+        <div class="alert alert-ok"><p>{{ t(request, "notifications.rule.test_sent") }}</p></div>
+      {% elif test_error %}
+        <div class="alert alert-error"><p>{{ t(request, "notifications.rule.test_failed", error=test_error) }}</p></div>
+      {% endif %}
+
+      <label for="delivery_channel">{{ t(request, "notifications.rule.send_via_label") }}</label>
+      <select id="delivery_channel" name="delivery_channel" data-delivery-channel-select>
+        <option value="email" {{ 'selected' if selected_delivery_channel == 'email' else '' }}>
+          {{ t(request, "notifications.rule.send_via_email") }}
+        </option>
+        <option value="webhook" {{ 'selected' if selected_delivery_channel == 'webhook' else '' }}>
+          {{ t(request, "notifications.rule.send_via_webhook") }}
+        </option>
+      </select>
+      <p class="hint">{{ t(request, "notifications.rule.send_via_hint") }}</p>
+
+      <div data-delivery-webhook-field {{ 'hidden' if selected_delivery_channel != 'webhook' else '' }}>
+        <label for="webhook_url">{{ t(request, "notifications.rule.webhook_url_label") }}</label>
+        <input type="text" id="webhook_url" name="webhook_url" maxlength="2048"
+               placeholder="https://example.com/hooks/ucc" value="{{ selected_webhook_url or '' }}">
+        <p class="hint">{{ t(request, "notifications.rule.webhook_url_hint") }}</p>
+      </div>
+
+      <label for="custom_template_id">{{ t(request, "notifications.rule.template_label") }}</label>
+      <select id="custom_template_id" name="custom_template_id">
+        <option value="">{{ t(request, "notifications.rule.template_default") }}</option>
+        {% for template in all_custom_templates %}
+          <option value="{{ template.id }}" {{ 'selected' if selected_custom_template_id == template.id | string else '' }}>
+            {{ template.name }}
+          </option>
+        {% endfor %}
+      </select>
+      <p class="hint">
+        {{ t(request, "notifications.rule.template_hint_before") }}
+        <a href="/notifications/templates">{{ t(request, "notifications.templates_link") }}</a>{{ t(request, "notifications.rule.template_hint_after") }}
+      </p>
+
+      {% if rule %}
+        <form method="post" action="/notifications/rules/{{ rule.id }}/test" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button button-secondary">{{ t(request, "notifications.rule.send_test") }}</button>
+        </form>
+        <p class="hint">{{ t(request, "notifications.rule.send_test_hint") }}</p>
+        <p class="hint"><a href="/notifications/history?rule_id={{ rule.id }}">{{ t(request, "notifications.rule.view_history") }}</a></p>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <h2>{{ t(request, "notifications.rule.section_recipients") }}</h2>
+
+      <label>{{ t(request, "notifications.rule.recipients_users_label") }}</label>
+      {% if all_users %}
+        <div class="checklist-filter-group">
+          <input type="search" data-checklist-filter placeholder="{{ t(request, 'notifications.rule.filter_placeholder') }}"
+                 aria-label="{{ t(request, 'notifications.rule.recipients_users_label') }}">
+          <div class="permission-grid" data-checklist-items>
+            {% for user in all_users %}
+              <label>
+                <input type="checkbox" name="user_ids" value="{{ user.id }}"
+                       {{ 'checked' if user.id | string in selected_user_ids else '' }}>
+                {{ user.display_name or user.username }}{% if not user.email %} ({{ t(request, "notifications.rule.no_email") }}){% endif %}
+              </label>
+            {% endfor %}
+          </div>
+          <p class="hint" data-checklist-empty hidden>{{ t(request, "notifications.rule.filter_no_matches") }}</p>
+        </div>
+      {% else %}
+        <p class="hint">{{ t(request, "notifications.rule.no_users") }}</p>
+      {% endif %}
+
+      <label>{{ t(request, "notifications.rule.recipients_roles_label") }}</label>
+      {% if all_roles %}
+        <div class="checklist-filter-group">
+          <input type="search" data-checklist-filter placeholder="{{ t(request, 'notifications.rule.filter_placeholder') }}"
+                 aria-label="{{ t(request, 'notifications.rule.recipients_roles_label') }}">
+          <div class="permission-grid" data-checklist-items>
+            {% for role in all_roles %}
+              <label>
+                <input type="checkbox" name="role_ids" value="{{ role.id }}"
+                       {{ 'checked' if role.id | string in selected_role_ids else '' }}>
+                {{ role.name }}
+              </label>
+            {% endfor %}
+          </div>
+          <p class="hint" data-checklist-empty hidden>{{ t(request, "notifications.rule.filter_no_matches") }}</p>
+        </div>
+      {% else %}
+        <p class="hint">{{ t(request, "notifications.rule.no_roles") }}</p>
+      {% endif %}
+      <p class="hint">{{ t(request, "notifications.rule.recipients_hint") }}</p>
+    </div>
+
+    <div class="panel">
+      <h2>{{ t(request, "notifications.rule.section_scope") }}</h2>
+
+      <label>{{ t(request, "notifications.rule.scope_fabrics_label") }}</label>
+      {% if all_fabrics %}
+        <div class="checklist-filter-group">
+          <input type="search" data-checklist-filter placeholder="{{ t(request, 'notifications.rule.filter_placeholder') }}"
+                 aria-label="{{ t(request, 'notifications.rule.scope_fabrics_label') }}">
+          <div class="permission-grid" data-checklist-items>
+            {% for fabric in all_fabrics %}
+              <label>
+                <input type="checkbox" name="fabric_ids" value="{{ fabric.id }}"
+                       {{ 'checked' if fabric.id | string in selected_fabric_ids else '' }}>
+                {{ fabric.name }}
+              </label>
+            {% endfor %}
+          </div>
+          <p class="hint" data-checklist-empty hidden>{{ t(request, "notifications.rule.filter_no_matches") }}</p>
+        </div>
+      {% endif %}
+      <p class="hint">{{ t(request, "notifications.rule.scope_hint") }}</p>
+    </div>
+
+    <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    <a class="button button-secondary" href="/notifications">{{ t(request, "common.cancel") }}</a>
+    {% if rule %}
+      <a class="button button-secondary" href="/notifications/rules/{{ rule.id }}/export">
+        {{ t(request, "notifications.rule.export_yaml") }}
+      </a>
+    {% endif %}
+  </form>
+{% endblock %}

@@ -1,0 +1,84 @@
+<p class="hint">
+  {% if fabric.last_sync_error %}
+    <span class="badge badge-error">{{ t(request, "fabrics.sync_failed") }}</span> {{ fabric.last_sync_error }}
+  {% elif fabric.last_sync_at %}
+    {{ t(request, "fabrics.last_synced", when=(fabric.last_sync_at | local_time('%Y-%m-%d %H:%M %Z'))) }}
+  {% else %}
+    {{ t(request, "fabrics.never_synced") }}
+  {% endif %}
+</p>
+
+{% if not consoles %}
+  <section class="panel">
+    <p class="hint">{{ t(request, "fabrics.no_consoles") }}</p>
+  </section>
+{% endif %}
+
+{% for console in consoles %}
+  <section class="panel">
+    <h2>
+      {{ console.name or console.host_id }}
+      {% if console.is_online %}<span class="badge badge-ok">{{ t(request, "fabrics.online") }}</span>
+      {% else %}<span class="badge badge-error">{{ t(request, "fabrics.offline") }}</span>{% endif %}
+    </h2>
+    <p class="hint">
+      {{ console.model or '—' }}{% if console.ip_address %} · {{ console.ip_address }}{% endif %}
+      · {{ t(request, "fabrics.sites_count", count=(console.sites | length)) }}
+    </p>
+
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "fabrics.table.component") }}</th>
+          <th>{{ t(request, "fabrics.table.version") }}</th>
+          <th>{{ t(request, "fabrics.table.update_available") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>UniFi OS</td>
+          <td>{{ console.os_version or '—' }}</td>
+          <td>{% if console.os_update_available %}<span class="badge badge-warn">{{ console.os_update_available }}</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% for app in console.apps | sort(attribute='name') %}
+        <tr>
+          <td>{{ app.name | capitalize }}</td>
+          <td>{{ app.version or '—' }}</td>
+          <td>{% if app.update_available %}<span class="badge badge-warn">{{ app.update_available }}</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if console.devices %}
+    <h3>{{ t(request, "fabrics.devices_heading", count=(console.devices | length)) }}</h3>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "fabrics.table.device") }}</th>
+          <th>{{ t(request, "fabrics.table.model") }}</th>
+          <th>{{ t(request, "fabrics.table.site") }}</th>
+          <th>{{ t(request, "fabrics.table.version") }}</th>
+          <th>{{ t(request, "fabrics.table.update_available") }}</th>
+          <th>{{ t(request, "common.status") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for device in console.devices %}
+        <tr>
+          <td>{{ device.name or device.mac }}</td>
+          <td>{{ device.model or '—' }}</td>
+          <td>{{ (device.site.name or device.site.site_id) if device.site else '—' }}</td>
+          <td>{{ device.version or '—' }}</td>
+          <td>{% if device.update_available %}<span class="badge badge-warn">{{ device.update_available }}</span>{% else %}—{% endif %}</td>
+          <td>
+            {% if device.is_online %}<span class="badge badge-ok">{{ t(request, "fabrics.online") }}</span>
+            {% else %}<span class="badge badge-error">{{ t(request, "fabrics.offline") }}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+{% endfor %}

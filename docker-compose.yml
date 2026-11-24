@@ -1,0 +1,194 @@
+name: ucc
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+    # Stamps the built image with the commit it came from (app.core.version,
+    # shown on the Settings page) — set GIT_COMMIT in the shell/`.env` before
+    # building, e.g. `GIT_COMMIT=$(git rev-parse HEAD) docker compose build`;
+    # scripts/upgrade.sh does this automatically. Defaults to "unknown".
+    args:
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
+  image: ucc:local
+  env_file:
+    - .env
+  environment:
+    # Container timezone — affects log timestamps and any local-time
+    # formatting; the app and DB both store timestamps as UTC internally
+    # regardless of this. Set TZ in .env (e.g. "Europe/Prague"); defaults
+    # to UTC if unset. Deliberately global, not per-schedule — see
+    # wiki/Architecture.md.
+    TZ: ${TZ:-UTC}
+  restart: unless-stopped
+
+services:
+  db:
+    # Pinned to an exact patch version on purpose — the floating "18" tag
+    # would silently pull newer minor releases on a rebuild. Bump this
+    # deliberately (and re-test) rather than letting it happen implicitly.
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: ${TZ:-UTC}
+    # Tuned out of the box for a modest deployment (see
+    # wiki/Host-Requirements.md's Quick reference table) on a modest host —
+    # not Postgres' own stock defaults (128MB/4GB/4MB/64MB/0.2/0.1), which
+    # assume either a tiny local dev instance or a dedicated DB server with
+    # GBs to spare. shared_buffers/maintenance_work_mem/work_mem below are
+    # sized to stay well under ~512MB of Postgres' own RAM use at this
+    # fleet size (shared_buffers is allocated once at startup;
+    # maintenance_work_mem/work_mem are per-operation ceilings, not
+    # standing allocations) rather than the stock "assume a big dedicated
+    # box" numbers. The two autovacuum_*_scale_factor values are lower
+    # than stock so autovacuum keeps up with this app's own nightly
+    # retention purges (monitoring/audit/notification-log tables can lose
+    # a large fraction of their rows in one purge run). Override any of
+    # these via .env for a bigger fleet/host — see wiki/Host-Requirements.md's
+    # Postgres tuning section for how to size them up.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-768MB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-128MB}
+      - -c
+      - autovacuum_vacuum_scale_factor=${POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR:-0.05}
+      - -c
+      - autovacuum_analyze_scale_factor=${POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR:-0.02}
+    # Mounted at the parent directory, not .../data — as of the postgres:18
+    # image, PGDATA defaults to a major-version-specific subdirectory it
+    # manages itself (/var/lib/postgresql/18/docker), mirroring
+    # pg_ctlcluster's layout. Mounting at .../data directly (the old
+    # convention) leaves that subdirectory looking empty to a fresh 18.x
+    # image even once initialized, and the image now refuses to start
+    # rather than risk silently starting empty next to real data sitting
+    # at the legacy path. See https://github.com/docker-library/postgres/pull/1259.
+    volumes:
+      - pg_data:/var/lib/postgresql
+    # Not published to the host on purpose — the DB is only reachable from
+    # the docker network. Uncomment for local psql access:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    # Same reasoning as the Postgres image above — pinned to an exact patch.
+    image: redis:8.10.1
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      # Only ever read inside the container by the healthcheck below
+      # ($${REDIS_PASSWORD}, resolved by the container's own shell at
+      # healthcheck time) — the server itself gets its password from the
+      # command-line arg, substituted by Compose from the host/.env value
+      # at parse time, same as it always did.
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    <<: *app-image
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    <<: *app-image
+    ports:
+      # Host port is configurable via APP_PORT in .env (default 8080); the
+      # container always listens on 8080 internally. Published on all
+      # interfaces by default (APP_BIND_ADDRESS, default 0.0.0.0), and
+      # plain HTTP — this app is meant to sit behind a TLS-terminating
+      # reverse proxy (the bundled `caddy` service from
+      # docker-compose.caddy.yml, or your own; see the wiki), but nothing
+      # here restricts direct access to loopback. If you don't want this
+      # port reachable from outside this host, set
+      # APP_BIND_ADDRESS=127.0.0.1 in .env (no compose edit needed) or
+      # block the port at the firewall instead. A reverse proxy running as
+      # its own container should join this compose project's network
+      # instead of going through the published port at all.
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Executes background tasks (Site Manager inventory syncs, AI jobs,
+  # scheduled-task fan-out). Safe to scale to several
+  # replicas — every task is idempotent enough for that, and Redis hands each
+  # message to exactly one worker.
+  #
+  # --concurrency defaults to 10, the previous queue's own ceiling of jobs in
+  # flight — raise it via CELERY_WORKER_CONCURRENCY in .env for a larger
+  # deployment (see wiki/Host-Requirements.md's capacity-planning math for how to
+  # size this against CPU/memory and DB_POOL_SIZE together — more workers
+  # means more concurrent DB connections too). Each concurrency slot is a
+  # forked child process, which rebuilds its own DB engine after the fork —
+  # see app/tasks/celery_app.py for why that matters.
+  worker:
+    <<: *app-image
+    command:
+      [
+        "celery",
+        "-A",
+        "app.tasks.celery_app",
+        "worker",
+        "--loglevel=info",
+        "--concurrency=${CELERY_WORKER_CONCURRENCY:-10}",
+      ]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # The periodic scheduler: it runs no work itself, it only publishes the
+  # beat_schedule entries (the inventory sync sweep, the per-minute
+  # scheduled-task tick, the daily purge sweeps) onto the queue for `worker` to pick up.
+  #
+  # EXACTLY ONE beat process must ever run. Do not `docker compose up
+  # --scale beat=N` — every replica would publish the same schedule, so each
+  # daily purge and every sweep would fire N times.
+  #
+  # It reads the inventory sync interval (Settings -> Checks & retention,
+  # app/db/models/app_settings.py) from the database once at startup, so
+  # restart this service after changing it.
+  beat:
+    <<: *app-image
+    command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=info"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pg_data:
+  redis_data:

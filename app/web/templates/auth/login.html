@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="{{ request.state.locale.code }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ t(request, "login.submit") }} — ucc</title>
+  <link rel="icon" href="{{ favicon_href() or '/static/img/favicon.svg' }}">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="auth-body">
+  {% from "partials/_brand.html" import render as render_brand %}
+  <main class="auth-page">
+    <span class="brand">{{ render_brand('auth') }}</span>
+    <div class="panel">
+      {% if oidc_error %}
+        <div class="alert alert-error"><p>{{ oidc_error }}</p></div>
+      {% endif %}
+      {% if error %}
+        <div class="alert alert-error"><p>{{ error }}</p></div>
+      {% endif %}
+
+      {# Step one of two: just the account, no password field here — see
+         GET /login/password (step two) for the passkey/password choice.
+         A plain GET (no server-side lookup, nothing to rate-limit or
+         audit-log) straight to that route, `username` carried as an
+         ordinary query param the same way `next` already is elsewhere in
+         this app — see login_password_form's own docstring for why that's
+         fine even though it's the account's own username. #}
+      <form method="get" action="/login/password" class="form" autocomplete="off">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label for="username">{{ t(request, "login.username") }}</label>
+        <input type="text" id="username" name="username" value="{{ form.username or '' }}"
+               autocomplete="username" autofocus required>
+        <button type="submit" class="button">{{ t(request, "login.continue") }}</button>
+      </form>
+
+      {% if app_settings.oidc_enabled %}
+        <a href="/auth/oidc/login" class="button button-secondary stack-gap">
+          {{ t(request, "login.oidc_button_named", name=app_settings.oidc_provider_name) if app_settings.oidc_provider_name else t(request, "login.oidc_button") }}
+        </a>
+      {% endif %}
+    </div>
+  </main>
+</body>
+</html>

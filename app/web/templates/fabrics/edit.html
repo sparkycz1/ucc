@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "fabrics.edit") }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "fabrics.edit") }}: {{ fabric.name }}</h1>
+
+  {% if errors %}
+    <div class="alert alert-error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  <form method="post" action="/fabrics/{{ fabric.id }}/edit" class="form" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% include "fabrics/_form_fields.html" %}
+    <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    <a class="button button-secondary" href="/fabrics/{{ fabric.id }}">{{ t(request, "common.cancel") }}</a>
+  </form>
+
+  <section class="panel">
+    <h2>{{ t(request, "fabrics.delete.heading") }}</h2>
+    <p class="hint">{{ t(request, "fabrics.delete.hint") }}</p>
+    <form method="post" action="/fabrics/{{ fabric.id }}/delete" class="inline-form"
+          data-confirm="{{ t(request, 'fabrics.delete.confirm', name=fabric.name) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button button-danger">{{ t(request, "fabrics.delete.button") }}</button>
+    </form>
+  </section>
+{% endblock %}

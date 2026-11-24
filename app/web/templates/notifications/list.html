@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "notifications.title") }} — ucc{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>{{ t(request, "notifications.title") }}</h1>
+    <div>
+      <a class="button button-secondary" href="/notifications/templates">{{ t(request, "notifications.templates_link") }}</a>
+      <a class="button button-secondary" href="/notifications/history">{{ t(request, "notifications.history_link") }}</a>
+      {% if rules %}
+        <a class="button button-secondary" href="/notifications/rules/export">{{ t(request, "notifications.rule.export_all_yaml") }}</a>
+      {% endif %}
+      <a class="button button-secondary" href="/notifications/rules/import">{{ t(request, "notifications.rule.import_yaml") }}</a>
+      <a class="button" href="/notifications/rules/new">{{ t(request, "notifications.add_rule") }}</a>
+    </div>
+  </div>
+
+  {% if not smtp_configured %}
+    <div class="alert alert-warn">
+      {{ t(request, "notifications.smtp_not_configured") }}
+      <a href="/settings?tab=integrations">{{ t(request, "notifications.smtp_not_configured_link") }}</a>
+    </div>
+  {% endif %}
+
+  {% if rules %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "notifications.table.name") }}</th>
+          <th>{{ t(request, "notifications.table.events") }}</th>
+          <th>{{ t(request, "notifications.table.recipients") }}</th>
+          <th>{{ t(request, "notifications.table.scope") }}</th>
+          <th>{{ t(request, "notifications.table.enabled") }}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in rules %}
+          <tr>
+            <td><a href="/notifications/rules/{{ rule.id }}/edit">{{ rule.name }}</a></td>
+            <td>
+              {% for event in rule.event_type_enums %}
+                <span class="badge badge-tag">{{ t(request, "notifications.event." ~ event.name | lower) }}</span>
+              {% endfor %}
+            </td>
+            <td>
+              {% if rule.delivery_channel == "webhook" %}
+                <span class="badge badge-tag">{{ t(request, "notifications.rule.send_via_webhook") }}</span>
+              {% else %}
+                {{ rule.users | length }} {{ t(request, "notifications.users_word") }}, {{ rule.roles | length }} {{ t(request, "notifications.roles_word") }}
+              {% endif %}
+            </td>
+            <td>
+              {% if not rule.fabrics %}
+                {{ t(request, "notifications.scope_all") }}
+              {% else %}
+                {{ rule.fabrics | map(attribute="name") | join(", ") }}
+              {% endif %}
+            </td>
+            <td>{{ t(request, "notifications.yes") if rule.enabled else t(request, "notifications.no") }}</td>
+            <td>
+              <form method="post" action="/notifications/rules/{{ rule.id }}/delete" class="inline-form"
+                    data-confirm="{{ t(request, 'notifications.delete_confirm', name=(rule.name | e)) | safe }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="button button-danger">{{ t(request, "notifications.delete") }}</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="hint">{{ t(request, "notifications.no_rules") }}</p>
+  {% endif %}
+{% endblock %}

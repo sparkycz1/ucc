@@ -1,0 +1,32 @@
+  <section class="panel-group">
+    <h2>{{ t(request, "settings.checks.category_inventory") }}</h2>
+
+    <div class="panel">
+      <form method="post" action="/settings/background-checks" class="form" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="inventory_sync_interval_seconds">{{ t(request, "settings.checks.inventory_sync_interval") }}</label>
+        <input type="number" id="inventory_sync_interval_seconds" name="inventory_sync_interval_seconds"
+               min="60" max="86400" step="1" value="{{ app_settings.inventory_sync_interval_seconds }}">
+        <p class="hint">{{ t(request, "settings.checks.background_checks_hint") }}</p>
+        <button type="submit" class="button">{{ t(request, "settings.checks.save_background_checks") }}</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="panel-group">
+    <h2>{{ t(request, "settings.checks.category_notifications") }}</h2>
+
+    <div class="panel">
+      <h3>{{ t(request, "settings.checks.notification_log_history") }}</h3>
+      <p class="hint">{{ t(request, "settings.checks.notification_log_hint") }}</p>
+      <form method="post" action="/settings/notification-log-retention" class="form" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="notification_log_retention_days">{{ t(request, "settings.checks.keep_notification_log_days") }}</label>
+        <input type="number" id="notification_log_retention_days" name="retention_days" min="0" step="1"
+               placeholder="{{ t(request, 'settings.checks.forever') }}"
+               value="{{ app_settings.notification_log_retention_days if app_settings.notification_log_retention_days is not none else '' }}">
+        <p class="hint">{{ t(request, "settings.checks.keep_notification_log_hint") }}</p>
+        <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+      </form>
+    </div>
+  </section>

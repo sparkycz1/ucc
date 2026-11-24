@@ -1,0 +1,185 @@
+[project]
+name = "ucc"
+version = "0.1.0"
+description = "UniFi Control Center — AI-gated management of UniFi firmware and application updates"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "PolyForm-Noncommercial-1.0.0" }
+
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+    # Lower bound is `openrouter`'s own ceiling (`pydantic>=2.11.2,<2.13`,
+    # every 1.x release so far — see that dependency's own comment below),
+    # not a feature floor of this app's — nothing here needs anything
+    # pydantic 2.13 added. `uv lock` currently resolves this to 2.12.x
+    # because of that ceiling; the full test suite + `mypy --strict`-style
+    # gate both pass at that version. Revisit once `openrouter` lifts it.
+    "pydantic>=2.11.2",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "asyncpg>=0.31.0",
+    "alembic>=1.19.1",
+    # Note: the `redis-py` client library is independent from the Redis SERVER
+    # version (8.10). It used to carry a hard `<6` cap here, purely because the
+    # old task queue (arq) refused redis-py 6.x. That reason is gone: the queue
+    # is Celery now, and `kombu[redis]` (Celery's transport layer) declares
+    # `redis >=4.5.2,!=4.5.5,!=5.0.2,<6.5` itself — so the real upper bound is
+    # kombu's, and repeating a stricter one here would only mask it. Only the
+    # lower bound stays, since the app is not tested below 5.3.1.
+    # See wiki/Architecture.md, "Dependency version notes".
+    "redis[hiredis]>=5.3.1",
+    # Task queue: broker AND result backend are the same Redis instance
+    # (REDIS_URL). `[redis]` pulls kombu's redis transport. See
+    # app/tasks/celery_app.py and wiki/Architecture.md.
+    "celery[redis]>=5.6.3",
+    "jinja2>=3.1.6",
+    "python-multipart>=0.0.32",
+    "cryptography>=50.0.1",
+    "itsdangerous>=2.2.0",
+    # Standard 5-field cron expression parsing/next-run computation for
+    # Scheduling (app/scheduling/). Well-established, tiny, no transitive deps.
+    "croniter>=6.0.0",
+    # YAML export/import for condition-based Notification rules
+    # (app/web/routes/notifications.py) — already an indirect dependency
+    # (a Celery-ecosystem package pulls it in), promoted to direct since
+    # this app now imports it itself rather than only relying on it
+    # transitively.
+    "pyyaml>=6.0.3",
+    # --- Authentication (app/auth/) ---
+    # Argon2id password hashing for local accounts — current OWASP-recommended
+    # default, memory-hard (better GPU/ASIC resistance than bcrypt).
+    "argon2-cffi>=25.1.0",
+    # Pure-Python LDAP client — no system libldap2-dev headers needed in the
+    # Docker image, unlike python-ldap.
+    "ldap3>=2.9.1",
+    # OIDC/OAuth2 client: discovery, authorization-code flow, ID token
+    # validation. Used together with Starlette's own SessionMiddleware (no
+    # new dependency needed for that) to carry state/nonce across the
+    # redirect to/from the provider.
+    "authlib>=1.7.2",
+    # Not used directly by this app's own code — but
+    # authlib.integrations.starlette_client (app/auth/oidc.py) imports
+    # authlib.integrations.httpx_client at module load time regardless of
+    # whether OIDC is actually configured, so httpx has to be a real
+    # runtime dependency, not just something the test suite happens to
+    # need. Without it here, a production image built with `uv sync
+    # --no-dev` fails to import app.main at all.
+    "httpx>=0.28.1",
+    # TOTP (RFC 6238) generation/verification for two-factor authentication.
+    "pyotp>=2.10.0",
+    # Renders the TOTP enrollment QR code as inline SVG — deliberately used
+    # without its optional Pillow/PNG extra, which isn't needed for that.
+    "qrcode>=8.2",
+    # --- AI assistant providers (app/ai/providers.py) ---
+    # Every provider here has an official Python SDK, and this app uses all
+    # four rather than hand-building and maintaining its own requests
+    # against their documented wire formats: each SDK's own request/
+    # response typing, retry/backoff behavior, and error types. See that
+    # module's own docstring for the (two, as it happens) underlying HTTP
+    # libraries these four build on, and how tests inject a mock transport
+    # of the matching one.
+    "anthropic>=1.3.0",
+    # Also used for plain OpenAI and any self-hosted "OpenAI-compatible"
+    # endpoint (litellm, vLLM, a corporate gateway) — both speak this SDK's
+    # exact wire format, differing only in `base_url` and whether a key is
+    # required. See `OpenAICompatibleClient`. NOT used for OpenRouter
+    # (below) even though OpenRouter's API is also OpenAI-compatible — it
+    # has its own dedicated SDK, which is what this app uses for it instead.
+    "openai>=3.6.0",
+    # OpenRouter's own SDK — see `OpenRouterClient`. 1.x (declared "stable
+    # as of v1.0") pins `pydantic<2.13`, hence this project's own pydantic
+    # floor above; 1.x also changed `models.list_async`'s response shape
+    # (`response.result.data` instead of `response.data`, and it can
+    # legitimately return `None`) and added pagination query params to the
+    # models endpoint — both handled in `OpenRouterClient.list_models`.
+    # `chat.send_async`'s shape (`.choices`/`.usage`/tool-call parsing) is
+    # unchanged from 0.x.
+    "openrouter>=1.1.139",
+    # Google's SDK for Gemini — see `GeminiClient`.
+    "google-genai>=2.21.0",
+    # Renders a machine's runbook (Overview tab) from Markdown to HTML —
+    # pure Python, no C extension, no transitive dependencies. Used with
+    # its default escape=True (raw HTML in the source is escaped to text,
+    # not passed through), so a runbook can't inject markup even though
+    # only machine.manage accounts can edit one. See app.web.templating.
+    "mistune>=3.0.0",
+    # WebAuthn/passkey registration and authentication ceremony verification
+    # (RP-side): attestation/assertion signature checking, challenge
+    # handling. The de facto standard Python implementation (py_webauthn) —
+    # see app/auth/webauthn.py. Pulls in cbor2 (CBOR decoding for
+    # attestation objects) and pyOpenSSL (certificate chain validation for
+    # attestation) as transitive dependencies.
+    "webauthn>=2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "aiosqlite>=0.22.1",
+    "ruff>=0.16.4",
+    "mypy>=2.3.1",
+    "python-dotenv>=1.2.3",
+    "types-authlib>=1.7.2.20260827",
+    "types-croniter>=6.0.0",
+    "types-ldap3>=2.9.13.20260827",
+    "types-qrcode>=8.2.0.20260518",
+    "types-pyyaml>=6.0.12.20260826",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
+# S101: assert used (fine in tests).
+# B008: Depends()/Form() as a parameter default is the idiomatic, required
+# dependency-injection pattern in FastAPI, not a bug.
+ignore = ["S101", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+# "password" here is just an enum value label (authentication method), not a secret.
+"app/db/models/machine.py" = ["S105"]
+
+[tool.mypy]
+python_version = "3.14"
+plugins = ["pydantic.mypy"]
+strict = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# Celery ships no type information (no py.typed, no stub package on PyPI as
+# of 5.6). Without this every `import celery...` is an error and the whole
+# task layer goes unchecked for unrelated reasons.
+module = ["celery.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Consequence of the override above: `celery_app` is `Any`, so every
+# `@celery_app.task(...)` counts as an "untyped decorator" under strict mode.
+# The decorated wrappers here are one-liners whose *bodies* are still fully
+# checked; only the decorator itself is opaque.
+module = [
+    "app.tasks.celery_app",
+    "app.tasks.jobs",
+    "app.tasks.ai_jobs",
+    "app.scheduling.jobs",
+]
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+# Strict typing pays off mainly in `app/` — test fixtures and asserts don't
+# need it, and annotating them just slows things down for no real benefit.
+module = "tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

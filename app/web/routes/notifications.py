@@ -1,0 +1,1107 @@
+"""Notifications — rules ("when X happens, tell these people about these
+Fabrics") and per-event email templates. See
+`app.db.models.notification_rule`'s module docstring for the data model
+(recipients are directly-listed users plus every active user holding one
+of the rule's target roles — no separate notification-only grouping
+concept) and `app.services.notifications` for how a rule actually turns
+into a sent email.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+from urllib.parse import quote
+
+import yaml
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.audit import log_event
+from app.auth.dependencies import get_current_user, require_permission
+from app.core.app_settings import get_or_create_app_settings
+from app.core.csrf import get_or_create_csrf_token, set_csrf_cookie, verify_csrf
+from app.db.models.fabric import Fabric
+from app.db.models.notification_log import NotificationDeliveryChannel, NotificationLog
+from app.db.models.notification_rule import (
+    NotificationCustomTemplate,
+    NotificationEventType,
+    NotificationRule,
+    NotificationTemplate,
+)
+from app.db.models.role import Permission, Role
+from app.db.models.user import User
+from app.db.session import get_db
+from app.schemas.notification import (
+    NotificationCustomTemplateCreate,
+    NotificationRuleCreate,
+    NotificationTemplateUpdate,
+)
+from app.services.notifications import default_template, send_test_notification
+from app.web.templating import templates
+
+router = APIRouter(
+    prefix="/notifications",
+    dependencies=[Depends(require_permission(Permission.NOTIFICATION_VIEW))],
+)
+_manage = Depends(require_permission(Permission.NOTIFICATION_MANAGE))
+
+
+async def _smtp_configured(db: AsyncSession) -> bool:
+    app_settings = await get_or_create_app_settings(db)
+    return bool(app_settings.smtp_enabled and app_settings.smtp_host)
+
+
+async def _get_rule_or_404(rule_id: uuid.UUID, db: AsyncSession) -> NotificationRule:
+    rule = await db.get(NotificationRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rule not found.")
+    return rule
+
+
+async def _all_users(db: AsyncSession) -> list[User]:
+    result = await db.execute(select(User).order_by(User.username))
+    return list(result.scalars().all())
+
+
+async def _all_roles(db: AsyncSession) -> list[Role]:
+    result = await db.execute(select(Role).order_by(Role.name))
+    return list(result.scalars().all())
+
+
+async def _all_fabrics(db: AsyncSession) -> list[Fabric]:
+    result = await db.execute(select(Fabric).order_by(Fabric.name))
+    return list(result.scalars().all())
+
+
+async def _all_custom_templates(db: AsyncSession) -> list[NotificationCustomTemplate]:
+    result = await db.execute(
+        select(NotificationCustomTemplate).order_by(NotificationCustomTemplate.name)
+    )
+    return list(result.scalars().all())
+
+
+async def _resolve_custom_template_id(
+    db: AsyncSession, raw: str
+) -> uuid.UUID | None:
+    """`""` (the "use the per-event default" option) and any id that no
+    longer matches an existing template both resolve to `None` — the same
+    permissive "silently drop what doesn't match" the scope/recipient
+    pickers already use, so a template deleted out from under a rule never
+    turns saving that rule into an error."""
+    if not raw.strip():
+        return None
+    try:
+        template_id = uuid.UUID(raw)
+    except ValueError:
+        return None
+    exists = await db.execute(
+        select(NotificationCustomTemplate.id).where(NotificationCustomTemplate.id == template_id)
+    )
+    return template_id if exists.scalar_one_or_none() is not None else None
+
+
+def _rule_form_context(rule: NotificationRule | None = None) -> dict[str, object]:
+    return {
+        "event_types": list(NotificationEventType),
+        "selected_event_types": [e.value for e in rule.event_type_enums] if rule else [],
+        "selected_user_ids": [str(u.id) for u in rule.users] if rule else [],
+        "selected_role_ids": [str(r.id) for r in rule.roles] if rule else [],
+        "selected_fabric_ids": [str(f.id) for f in rule.fabrics] if rule else [],
+        "selected_custom_template_id": (
+            str(rule.custom_template_id) if rule and rule.custom_template_id else ""
+        ),
+        "selected_delivery_channel": (
+            rule.delivery_channel if rule else NotificationDeliveryChannel.EMAIL.value
+        ),
+        "selected_webhook_url": rule.webhook_url if rule else "",
+    }
+
+
+def _parse_ids(raw_ids: list[str]) -> list[uuid.UUID]:
+    """Parsed and de-duplicated, dropping anything unparseable — same
+    "a tampered/stale id is rejected, not silently trusted" reasoning
+    `app/web/routes/users.py`'s `_parse_fabric_access` applies, except here a
+    bad id is simply dropped from the selection rather than rejecting the
+    whole form: a recipient/scope list is much lower-stakes than an
+    account's access scope."""
+    parsed: list[uuid.UUID] = []
+    for raw in raw_ids:
+        if not raw.strip():
+            continue
+        try:
+            parsed.append(uuid.UUID(raw.strip()))
+        except ValueError:
+            continue
+    return list(dict.fromkeys(parsed))
+
+
+async def _resolve_users(db: AsyncSession, raw_ids: list[str]) -> list[User]:
+    ids = _parse_ids(raw_ids)
+    if not ids:
+        return []
+    result = await db.execute(select(User).where(User.id.in_(ids)))
+    return list(result.scalars().all())
+
+
+async def _resolve_roles(db: AsyncSession, raw_ids: list[str]) -> list[Role]:
+    ids = _parse_ids(raw_ids)
+    if not ids:
+        return []
+    result = await db.execute(select(Role).where(Role.id.in_(ids)))
+    return list(result.scalars().all())
+
+
+async def _resolve_fabrics(db: AsyncSession, raw_ids: list[str]) -> list[Fabric]:
+    ids = _parse_ids(raw_ids)
+    if not ids:
+        return []
+    result = await db.execute(select(Fabric).where(Fabric.id.in_(ids)))
+    return list(result.scalars().all())
+
+
+@router.get("")
+async def list_notifications(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    result = await db.execute(
+        select(NotificationRule)
+        .options(
+            selectinload(NotificationRule.users),
+            selectinload(NotificationRule.roles),
+            selectinload(NotificationRule.fabrics),
+        )
+        .order_by(NotificationRule.name)
+    )
+    rules = result.scalars().all()
+    return templates.TemplateResponse(
+        request,
+        "notifications/list.html",
+        {
+            "rules": rules,
+            "smtp_configured": await _smtp_configured(db),
+            "csrf_token": request.state.csrf_token,
+        },
+    )
+
+
+@router.get("/rules/new")
+async def new_rule_form(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/rule_form.html",
+        {
+            "rule": None,
+            "all_users": await _all_users(db),
+            "all_roles": await _all_roles(db),
+            "all_fabrics": await _all_fabrics(db),
+            "all_custom_templates": await _all_custom_templates(db),
+            "errors": [],
+            "form": {"enabled": True},
+            "csrf_token": csrf_token,
+            **_rule_form_context(),
+        },
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+async def _apply_rule_recipients_and_scope(
+    db: AsyncSession,
+    rule: NotificationRule,
+    *,
+    user_ids: list[str],
+    role_ids: list[str],
+    fabric_ids: list[str],
+) -> None:
+    rule.users = await _resolve_users(db, user_ids)
+    rule.roles = await _resolve_roles(db, role_ids)
+    rule.fabrics = await _resolve_fabrics(db, fabric_ids)
+
+
+async def _render_rule_form(
+    request: Request,
+    db: AsyncSession,
+    rule: NotificationRule | None,
+    errors: list[str],
+    status_code: int,
+    *,
+    name: str,
+    description: str,
+    enabled: str,
+    event_types: list[str],
+    user_ids: list[str],
+    role_ids: list[str],
+    fabric_ids: list[str],
+    custom_template_id: str,
+    delivery_channel: str,
+    webhook_url: str,
+) -> Response:
+    """Re-render the rule form after a rejected submit, echoing back what
+    was typed — shared by create and update."""
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/rule_form.html",
+        {
+            "rule": rule,
+            "all_users": await _all_users(db),
+            "all_roles": await _all_roles(db),
+            "all_fabrics": await _all_fabrics(db),
+            "all_custom_templates": await _all_custom_templates(db),
+            "errors": errors,
+            "form": {"name": name, "description": description, "enabled": bool(enabled)},
+            "csrf_token": csrf_token,
+            "event_types": list(NotificationEventType),
+            "selected_event_types": event_types,
+            "selected_user_ids": user_ids,
+            "selected_role_ids": role_ids,
+            "selected_fabric_ids": fabric_ids,
+            "selected_custom_template_id": custom_template_id,
+            "selected_delivery_channel": delivery_channel,
+            "selected_webhook_url": webhook_url,
+        },
+        status_code=status_code,
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.post("/rules", dependencies=[_manage, Depends(verify_csrf)])
+async def create_rule(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    name: str = Form(...),
+    description: str = Form(""),
+    enabled: str = Form(""),
+    event_types: list[str] = Form(default=[]),
+    user_ids: list[str] = Form(default=[]),
+    role_ids: list[str] = Form(default=[]),
+    fabric_ids: list[str] = Form(default=[]),
+    custom_template_id: str = Form(""),
+    delivery_channel: str = Form(NotificationDeliveryChannel.EMAIL.value),
+    webhook_url: str = Form(""),
+) -> Response:
+    form_echo: dict[str, Any] = {
+        "name": name,
+        "description": description,
+        "enabled": enabled,
+        "event_types": event_types,
+        "user_ids": user_ids,
+        "role_ids": role_ids,
+        "fabric_ids": fabric_ids,
+        "custom_template_id": custom_template_id,
+        "delivery_channel": delivery_channel,
+        "webhook_url": webhook_url,
+    }
+    try:
+        payload = NotificationRuleCreate(
+            name=name,
+            description=description or None,
+            enabled=bool(enabled),
+            event_types=event_types,
+            delivery_channel=delivery_channel,
+            webhook_url=webhook_url or None,
+        )
+    except ValueError as exc:
+        return await _render_rule_form(
+            request, db, None, [str(exc)], status.HTTP_422_UNPROCESSABLE_CONTENT, **form_echo
+        )
+
+    rule = NotificationRule(
+        name=payload.name,
+        description=payload.description,
+        enabled=payload.enabled,
+        event_types=payload.event_types,
+        custom_template_id=await _resolve_custom_template_id(db, custom_template_id),
+        delivery_channel=payload.delivery_channel,
+        webhook_url=payload.webhook_url,
+    )
+    await _apply_rule_recipients_and_scope(
+        db, rule, user_ids=user_ids, role_ids=role_ids, fabric_ids=fabric_ids
+    )
+    db.add(rule)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return await _render_rule_form(
+            request,
+            db,
+            None,
+            [f'A notification rule named "{payload.name}" already exists.'],
+            status.HTTP_409_CONFLICT,
+            **form_echo,
+        )
+    await db.refresh(rule)
+
+    await log_event(
+        db,
+        request=request,
+        action="notification_rule.create",
+        summary=f'Created notification rule "{rule.name}"',
+        target_type="notification_rule",
+        target_id=rule.id,
+        target_label=rule.name,
+        details={"event_types": rule.event_types},
+    )
+    return RedirectResponse(url="/notifications", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/rules/{rule_id}/edit")
+async def edit_rule_form(
+    request: Request, rule_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    rule = await _get_rule_or_404(rule_id, db)
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/rule_form.html",
+        {
+            "rule": rule,
+            "all_users": await _all_users(db),
+            "all_roles": await _all_roles(db),
+            "all_fabrics": await _all_fabrics(db),
+            "all_custom_templates": await _all_custom_templates(db),
+            "errors": [],
+            "form": {
+                "name": rule.name,
+                "description": rule.description,
+                "enabled": rule.enabled,
+            },
+            "csrf_token": csrf_token,
+            "test_sent": request.query_params.get("test_sent") is not None,
+            "test_error": request.query_params.get("test_error"),
+            **_rule_form_context(rule),
+        },
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.post("/rules/{rule_id}/test", dependencies=[_manage, Depends(verify_csrf)])
+async def test_rule(
+    request: Request,
+    rule_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """"Send test" button on a rule's edit page — one synthetic delivery
+    through the rule's own configured channel/template, never its real
+    recipients (email goes only to the admin clicking the button — see
+    `app.services.notifications.send_test_notification`). Redirects back
+    to the edit page with a query-string result flag rather than an inline
+    partial, since a full navigation already happened to get here and the
+    result is a one-line pass/fail, not worth an extra htmx round trip."""
+    rule = await _get_rule_or_404(rule_id, db)
+    ok, error = await send_test_notification(
+        db,
+        rule,
+        to_email=current_user.email,
+        locale=request.state.locale.code,
+    )
+    await log_event(
+        db,
+        request=request,
+        action="notification_rule.test",
+        summary=f'Sent a test notification for rule "{rule.name}"',
+        target_type="notification_rule",
+        target_id=rule.id,
+        target_label=rule.name,
+        details={"ok": ok, "channel": rule.delivery_channel},
+    )
+    if ok:
+        query = "test_sent=1"
+    else:
+        query = "test_error=" + quote(error or "Unknown error")
+    return RedirectResponse(
+        url=f"/notifications/rules/{rule_id}/edit?{query}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/rules/{rule_id}/edit", dependencies=[_manage, Depends(verify_csrf)])
+async def update_rule(
+    request: Request,
+    rule_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    name: str = Form(...),
+    description: str = Form(""),
+    enabled: str = Form(""),
+    event_types: list[str] = Form(default=[]),
+    user_ids: list[str] = Form(default=[]),
+    role_ids: list[str] = Form(default=[]),
+    fabric_ids: list[str] = Form(default=[]),
+    custom_template_id: str = Form(""),
+    delivery_channel: str = Form(NotificationDeliveryChannel.EMAIL.value),
+    webhook_url: str = Form(""),
+) -> Response:
+    rule = await _get_rule_or_404(rule_id, db)
+    form_echo: dict[str, Any] = {
+        "name": name,
+        "description": description,
+        "enabled": enabled,
+        "event_types": event_types,
+        "user_ids": user_ids,
+        "role_ids": role_ids,
+        "fabric_ids": fabric_ids,
+        "custom_template_id": custom_template_id,
+        "delivery_channel": delivery_channel,
+        "webhook_url": webhook_url,
+    }
+    try:
+        payload = NotificationRuleCreate(
+            name=name,
+            description=description or None,
+            enabled=bool(enabled),
+            event_types=event_types,
+            delivery_channel=delivery_channel,
+            webhook_url=webhook_url or None,
+        )
+    except ValueError as exc:
+        return await _render_rule_form(
+            request, db, rule, [str(exc)], status.HTTP_422_UNPROCESSABLE_CONTENT, **form_echo
+        )
+
+    rule.name = payload.name
+    rule.description = payload.description
+    rule.enabled = payload.enabled
+    rule.event_types = payload.event_types
+    rule.custom_template_id = await _resolve_custom_template_id(db, custom_template_id)
+    rule.delivery_channel = payload.delivery_channel
+    rule.webhook_url = payload.webhook_url
+    await _apply_rule_recipients_and_scope(
+        db, rule, user_ids=user_ids, role_ids=role_ids, fabric_ids=fabric_ids
+    )
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return await _render_rule_form(
+            request,
+            db,
+            rule,
+            [f'A notification rule named "{payload.name}" already exists.'],
+            status.HTTP_409_CONFLICT,
+            **form_echo,
+        )
+
+    await log_event(
+        db,
+        request=request,
+        action="notification_rule.update",
+        summary=f'Updated notification rule "{rule.name}"',
+        target_type="notification_rule",
+        target_id=rule.id,
+        target_label=rule.name,
+        details={"event_types": rule.event_types},
+    )
+    return RedirectResponse(url="/notifications", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/rules/{rule_id}/delete", dependencies=[_manage, Depends(verify_csrf)])
+async def delete_rule(
+    request: Request, rule_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    rule = await _get_rule_or_404(rule_id, db)
+    name = rule.name
+    await db.delete(rule)
+    await db.commit()
+    await log_event(
+        db,
+        request=request,
+        action="notification_rule.delete",
+        summary=f'Deleted notification rule "{name}"',
+        target_type="notification_rule",
+        target_id=rule_id,
+        target_label=name,
+    )
+    return RedirectResponse(url="/notifications", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- YAML export/import ---------------------------------------------------
+#
+# A portable, human-editable representation of a whole rule — natural keys
+# (email/role name/Fabric name) rather than raw database ids,
+# so a rule exported from one instance can be reviewed, version-controlled,
+# and re-imported into another. Import upserts by `name` (the same unique
+# key `NotificationRule.name` already enforces), so re-importing an
+# unmodified export is a no-op and editing the YAML and re-importing is
+# "update in place." See `wiki/Notifications.md` for the full shape.
+
+
+def _rule_to_yaml_dict(rule: NotificationRule) -> dict[str, Any]:
+    return {
+        "name": rule.name,
+        "description": rule.description,
+        "enabled": rule.enabled,
+        "event_types": [e.value for e in rule.event_type_enums],
+        "recipients": {
+            "users": [u.email for u in rule.users if u.email],
+            "roles": [r.name for r in rule.roles],
+        },
+        "scope": {"fabrics": [f.name for f in rule.fabrics]},
+        "delivery_channel": rule.delivery_channel,
+        **({"webhook_url": rule.webhook_url} if rule.webhook_url else {}),
+        **({"template_name": rule.custom_template.name} if rule.custom_template else {}),
+    }
+
+
+async def _apply_yaml_rule(db: AsyncSession, data: dict[str, Any]) -> tuple[NotificationRule, bool]:
+    """Upserts one rule from a parsed YAML dict (`_rule_to_yaml_dict`'s
+    shape) — matched by `name`. Returns `(rule, created)`. Raises
+    `ValueError` on anything invalid; the caller rolls back the whole
+    import on the first bad rule rather than leaving a partial import
+    applied."""
+    if not isinstance(data, dict) or not data.get("name"):
+        raise ValueError("Each rule needs at least a \"name\".")
+
+    result = await db.execute(select(NotificationRule).where(NotificationRule.name == data["name"]))
+    rule = result.scalar_one_or_none()
+    created = rule is None
+    if rule is None:
+        rule = NotificationRule(name=data["name"])
+
+    event_types = [str(e) for e in (data.get("event_types") or [])]
+    try:
+        payload = NotificationRuleCreate(
+            name=data["name"],
+            description=data.get("description") or None,
+            enabled=bool(data.get("enabled", True)),
+            event_types=event_types,
+            delivery_channel=str(data.get("delivery_channel") or "email"),
+            webhook_url=(str(data["webhook_url"]) if data.get("webhook_url") else None),
+        )
+    except ValueError as exc:
+        raise ValueError(f'Rule "{data["name"]}": {exc}') from exc
+
+    rule.description = payload.description
+    rule.enabled = payload.enabled
+    rule.event_types = payload.event_types
+    rule.delivery_channel = payload.delivery_channel
+    rule.webhook_url = payload.webhook_url
+
+    template_name = data.get("template_name")
+    if template_name:
+        template_result = await db.execute(
+            select(NotificationCustomTemplate).where(
+                NotificationCustomTemplate.name == str(template_name)
+            )
+        )
+        custom_template = template_result.scalar_one_or_none()
+        if custom_template is None:
+            raise ValueError(
+                f'Rule "{data["name"]}": no custom template named "{template_name}".'
+            )
+        rule.custom_template_id = custom_template.id
+    else:
+        rule.custom_template_id = None
+
+    recipients = data.get("recipients") or {}
+    emails = [str(e) for e in (recipients.get("users") or [])]
+    role_names = [str(r) for r in (recipients.get("roles") or [])]
+    if emails:
+        user_result = await db.execute(select(User).where(User.email.in_(emails)))
+        rule.users = list(user_result.scalars().all())
+    else:
+        rule.users = []
+    if role_names:
+        role_result = await db.execute(select(Role).where(Role.name.in_(role_names)))
+        rule.roles = list(role_result.scalars().all())
+    else:
+        rule.roles = []
+
+    scope = data.get("scope") or {}
+    fabric_names = [str(f) for f in (scope.get("fabrics") or [])]
+    if fabric_names:
+        fabric_result = await db.execute(select(Fabric).where(Fabric.name.in_(fabric_names)))
+        rule.fabrics = list(fabric_result.scalars().all())
+    else:
+        rule.fabrics = []
+
+    if created:
+        db.add(rule)
+    return rule, created
+
+
+@router.get("/rules/{rule_id}/export")
+async def export_rule(
+    request: Request, rule_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    rule = await _get_rule_or_404(rule_id, db)
+    text = yaml.safe_dump(_rule_to_yaml_dict(rule), sort_keys=False, allow_unicode=True)
+    return Response(content=text, media_type="application/yaml")
+
+
+@router.get("/rules/export")
+async def export_all_rules(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    result = await db.execute(
+        select(NotificationRule)
+        .options(
+            selectinload(NotificationRule.users),
+            selectinload(NotificationRule.roles),
+            selectinload(NotificationRule.fabrics),
+        )
+        .order_by(NotificationRule.name)
+    )
+    rules = result.scalars().all()
+    text = yaml.safe_dump(
+        [_rule_to_yaml_dict(r) for r in rules], sort_keys=False, allow_unicode=True
+    )
+    return Response(content=text, media_type="application/yaml")
+
+
+@router.get("/rules/import")
+async def import_rules_form(request: Request) -> Response:
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/rule_import.html",
+        {"errors": [], "form": {}, "imported": None, "csrf_token": csrf_token},
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.post("/rules/import", dependencies=[_manage, Depends(verify_csrf)])
+async def import_rules(
+    request: Request, db: AsyncSession = Depends(get_db), yaml_text: str = Form(...)
+) -> Response:
+    async def _rerender(errors: list[str], status_code: int) -> Response:
+        csrf_token, new_cookie = get_or_create_csrf_token(request)
+        response = templates.TemplateResponse(
+            request,
+            "notifications/rule_import.html",
+            {
+                "errors": errors,
+                "form": {"yaml_text": yaml_text},
+                "imported": None,
+                "csrf_token": csrf_token,
+            },
+            status_code=status_code,
+        )
+        if new_cookie:
+            set_csrf_cookie(response, new_cookie)
+        return response
+
+    try:
+        parsed = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        return await _rerender([f"Invalid YAML: {exc}"], status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+    entries = parsed if isinstance(parsed, list) else [parsed]
+    created_count = 0
+    updated_count = 0
+    try:
+        for entry in entries:
+            _rule, created = await _apply_yaml_rule(db, entry)
+            created_count += 1 if created else 0
+            updated_count += 0 if created else 1
+        await db.commit()
+    except (ValueError, IntegrityError) as exc:
+        await db.rollback()
+        return await _rerender([str(exc)], status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+    await log_event(
+        db,
+        request=request,
+        action="notification_rule.import",
+        summary=f"Imported {created_count + updated_count} notification rule(s) from YAML",
+        details={"created": created_count, "updated": updated_count},
+    )
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/rule_import.html",
+        {
+            "errors": [],
+            "form": {},
+            "imported": {"created": created_count, "updated": updated_count},
+            "csrf_token": csrf_token,
+        },
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+# --- Delivery history -------------------------------------------------------
+
+
+@router.get("/history")
+async def notification_history(
+    request: Request, db: AsyncSession = Depends(get_db), rule_id: uuid.UUID | None = None
+) -> Response:
+    """The last 200 `NotificationLog` rows, newest first — one row per
+    actual send attempt (real or "Send test"), for troubleshooting "did
+    that alert actually go out." See `AppSettings.notification_log_retention_days`
+    for how long these are kept (Settings → Checks & retention).
+
+    Optionally narrowed to one rule via `?rule_id=` (linked from that rule's
+    own edit page) — `NotificationLog.rule_id` carries an index specifically
+    for this filter, since without one this scan would only get slower as
+    delivery history accumulates."""
+    query = select(NotificationLog).order_by(NotificationLog.sent_at.desc()).limit(200)
+    rule_filter_name: str | None = None
+    if rule_id is not None:
+        query = query.where(NotificationLog.rule_id == rule_id)
+        rule = await db.get(NotificationRule, rule_id)
+        rule_filter_name = rule.name if rule is not None else str(rule_id)
+    result = await db.execute(query)
+    logs = result.scalars().all()
+    return templates.TemplateResponse(
+        request,
+        "notifications/history.html",
+        {"logs": logs, "rule_filter_name": rule_filter_name},
+    )
+
+
+# --- Templates -----------------------------------------------------------
+
+
+@router.get("/templates")
+async def list_templates(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    result = await db.execute(select(NotificationTemplate))
+    overrides = {t.event_type: t for t in result.scalars().all()}
+    locale_code = request.state.locale.code
+    rows = [
+        {
+            "event_type": event_type,
+            "is_override": event_type.value in overrides,
+            "subject": (
+                overrides[event_type.value].subject
+                if event_type.value in overrides
+                else default_template(event_type, locale_code)[0]
+            ),
+        }
+        for event_type in NotificationEventType
+    ]
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/templates.html",
+        {
+            "rows": rows,
+            "custom_templates": await _all_custom_templates(db),
+            "csrf_token": csrf_token,
+        },
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.get("/templates/{event_type}/edit")
+async def edit_template_form(
+    request: Request, event_type: NotificationEventType, db: AsyncSession = Depends(get_db)
+) -> Response:
+    result = await db.execute(
+        select(NotificationTemplate).where(NotificationTemplate.event_type == event_type.value)
+    )
+    template = result.scalar_one_or_none()
+    default_subject, default_body = default_template(event_type, request.state.locale.code)
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/template_form.html",
+        {
+            "event_type": event_type,
+            "is_override": template is not None,
+            "subject": template.subject if template else default_subject,
+            "body": template.body if template else default_body,
+            "default_subject": default_subject,
+            "default_body": default_body,
+            "errors": [],
+            "csrf_token": csrf_token,
+        },
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.post("/templates/{event_type}/edit", dependencies=[_manage, Depends(verify_csrf)])
+async def update_template(
+    request: Request,
+    event_type: NotificationEventType,
+    db: AsyncSession = Depends(get_db),
+    subject: str = Form(...),
+    body: str = Form(...),
+) -> Response:
+    try:
+        payload = NotificationTemplateUpdate(subject=subject, body=body)
+    except ValueError as exc:
+        default_subject, default_body = default_template(event_type, request.state.locale.code)
+        csrf_token, new_cookie = get_or_create_csrf_token(request)
+        response = templates.TemplateResponse(
+            request,
+            "notifications/template_form.html",
+            {
+                "event_type": event_type,
+                "is_override": True,
+                "subject": subject,
+                "body": body,
+                "default_subject": default_subject,
+                "default_body": default_body,
+                "errors": [str(exc)],
+                "csrf_token": csrf_token,
+            },
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+        if new_cookie:
+            set_csrf_cookie(response, new_cookie)
+        return response
+
+    result = await db.execute(
+        select(NotificationTemplate).where(NotificationTemplate.event_type == event_type.value)
+    )
+    template = result.scalar_one_or_none()
+    if template is None:
+        template = NotificationTemplate(event_type=event_type.value, subject="", body="")
+        db.add(template)
+    template.subject = payload.subject
+    template.body = payload.body
+    await db.commit()
+
+    await log_event(
+        db,
+        request=request,
+        action="notification_template.update",
+        summary=f'Updated notification template for "{event_type.value}"',
+        target_type="notification_template",
+        target_id=event_type.value,
+        target_label=event_type.value,
+    )
+    return RedirectResponse(url="/notifications/templates", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/templates/{event_type}/reset", dependencies=[_manage, Depends(verify_csrf)])
+async def reset_template(
+    request: Request, event_type: NotificationEventType, db: AsyncSession = Depends(get_db)
+) -> Response:
+    result = await db.execute(
+        select(NotificationTemplate).where(NotificationTemplate.event_type == event_type.value)
+    )
+    template = result.scalar_one_or_none()
+    if template is not None:
+        await db.delete(template)
+        await db.commit()
+        await log_event(
+            db,
+            request=request,
+            action="notification_template.reset",
+            summary=f'Reset notification template for "{event_type.value}" to default',
+            target_type="notification_template",
+            target_id=event_type.value,
+            target_label=event_type.value,
+        )
+    return RedirectResponse(url="/notifications/templates", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Custom templates ------------------------------------------------------
+#
+# A named, reusable template any rule can select instead of the per-event
+# default/override above — see `NotificationCustomTemplate`'s docstring.
+
+
+async def _get_custom_template_or_404(
+    template_id: uuid.UUID, db: AsyncSession
+) -> NotificationCustomTemplate:
+    template = await db.get(NotificationCustomTemplate, template_id)
+    if template is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found.")
+    return template
+
+
+@router.get("/templates/custom/new")
+async def new_custom_template_form(request: Request) -> Response:
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/custom_template_form.html",
+        {
+            "template": None,
+            "form": {"name": "", "subject": "", "body": ""},
+            "errors": [],
+            "csrf_token": csrf_token,
+        },
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.post("/templates/custom", dependencies=[_manage, Depends(verify_csrf)])
+async def create_custom_template(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    name: str = Form(...),
+    subject: str = Form(...),
+    body: str = Form(...),
+) -> Response:
+    async def _rerender(errors: list[str], status_code: int) -> Response:
+        csrf_token, new_cookie = get_or_create_csrf_token(request)
+        response = templates.TemplateResponse(
+            request,
+            "notifications/custom_template_form.html",
+            {
+                "template": None,
+                "form": {"name": name, "subject": subject, "body": body},
+                "errors": errors,
+                "csrf_token": csrf_token,
+            },
+            status_code=status_code,
+        )
+        if new_cookie:
+            set_csrf_cookie(response, new_cookie)
+        return response
+
+    try:
+        payload = NotificationCustomTemplateCreate(name=name, subject=subject, body=body)
+    except ValueError as exc:
+        return await _rerender([str(exc)], status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+    template = NotificationCustomTemplate(
+        name=payload.name, subject=payload.subject, body=payload.body
+    )
+    db.add(template)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return await _rerender(
+            [f'A template named "{payload.name}" already exists.'],
+            status.HTTP_409_CONFLICT,
+        )
+    await db.refresh(template)
+
+    await log_event(
+        db,
+        request=request,
+        action="notification_custom_template.create",
+        summary=f'Created notification template "{template.name}"',
+        target_type="notification_custom_template",
+        target_id=template.id,
+        target_label=template.name,
+    )
+    return RedirectResponse(url="/notifications/templates", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/templates/custom/{template_id}/edit")
+async def edit_custom_template_form(
+    request: Request, template_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    template = await _get_custom_template_or_404(template_id, db)
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "notifications/custom_template_form.html",
+        {
+            "template": template,
+            "form": {"name": template.name, "subject": template.subject, "body": template.body},
+            "errors": [],
+            "csrf_token": csrf_token,
+        },
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.post("/templates/custom/{template_id}/edit", dependencies=[_manage, Depends(verify_csrf)])
+async def update_custom_template(
+    request: Request,
+    template_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    name: str = Form(...),
+    subject: str = Form(...),
+    body: str = Form(...),
+) -> Response:
+    template = await _get_custom_template_or_404(template_id, db)
+
+    async def _rerender(errors: list[str], status_code: int) -> Response:
+        csrf_token, new_cookie = get_or_create_csrf_token(request)
+        response = templates.TemplateResponse(
+            request,
+            "notifications/custom_template_form.html",
+            {
+                "template": template,
+                "form": {"name": name, "subject": subject, "body": body},
+                "errors": errors,
+                "csrf_token": csrf_token,
+            },
+            status_code=status_code,
+        )
+        if new_cookie:
+            set_csrf_cookie(response, new_cookie)
+        return response
+
+    try:
+        payload = NotificationCustomTemplateCreate(name=name, subject=subject, body=body)
+    except ValueError as exc:
+        return await _rerender([str(exc)], status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+    template.name = payload.name
+    template.subject = payload.subject
+    template.body = payload.body
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return await _rerender(
+            [f'A template named "{payload.name}" already exists.'],
+            status.HTTP_409_CONFLICT,
+        )
+
+    await log_event(
+        db,
+        request=request,
+        action="notification_custom_template.update",
+        summary=f'Updated notification template "{template.name}"',
+        target_type="notification_custom_template",
+        target_id=template.id,
+        target_label=template.name,
+    )
+    return RedirectResponse(url="/notifications/templates", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post(
+    "/templates/custom/{template_id}/delete", dependencies=[_manage, Depends(verify_csrf)]
+)
+async def delete_custom_template(
+    request: Request, template_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    template = await _get_custom_template_or_404(template_id, db)
+    name = template.name
+    # Any rule using this template falls back to its per-event
+    # default/override rather than being blocked or broken. Done explicitly
+    # here (not left to the FK's `ondelete="SET NULL"` alone) since that's
+    # a database-level action SQLite — the test suite's own database
+    # (`tests/conftest.py`) — never enforces without an explicit `PRAGMA
+    # foreign_keys=ON` this app doesn't set; Postgres would apply it too,
+    # but this keeps behavior identical on both.
+    await db.execute(
+        update(NotificationRule)
+        .where(NotificationRule.custom_template_id == template_id)
+        .values(custom_template_id=None)
+    )
+    await db.delete(template)
+    await db.commit()
+    await log_event(
+        db,
+        request=request,
+        action="notification_custom_template.delete",
+        summary=f'Deleted notification template "{name}"',
+        target_type="notification_custom_template",
+        target_id=template_id,
+        target_label=name,
+    )
+    return RedirectResponse(url="/notifications/templates", status_code=status.HTTP_303_SEE_OTHER)

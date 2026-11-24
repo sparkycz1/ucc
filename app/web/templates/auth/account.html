@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "account.title") }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "account.title") }}</h1>
+
+  {% if errors %}
+    <div class="alert alert-error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% if user.must_change_password %}
+    <div class="alert alert-warn">
+      <p>{{ t(request, "account.must_change_password") }}</p>
+    </div>
+  {% endif %}
+
+  {% if recovery_codes %}
+    <div class="alert alert-ok">
+      <p>
+        {% if just_enrolled %}{{ t(request, "account.totp.enabled_notice") }}{% else %}{{ t(request, "account.totp.new_codes_notice") }}{% endif %}
+        {{ t(request, "account.totp.save_codes_before") }} <strong>{{ t(request, "account.totp.save_codes_strong") }}</strong>{{ t(request, "account.totp.save_codes_after") }}
+      </p>
+      <div class="recovery-codes">
+        {% for code in recovery_codes %}<code>{{ code }}</code>{% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  <section class="panel">
+    <h2>{{ t(request, "account.profile.heading") }}</h2>
+    <dl class="detail-list">
+      <dt>{{ t(request, "account.profile.username") }}</dt><dd>{{ user.username }}</dd>
+      <dt>{{ t(request, "account.profile.role") }}</dt><dd>{{ user.role.name }}</dd>
+      <dt>{{ t(request, "account.profile.login_method") }}</dt><dd>{{ user.auth_provider.value }}</dd>
+    </dl>
+    <form method="post" action="/account/display-name" class="form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="display_name">{{ t(request, "account.profile.display_name") }}</label>
+      <input type="text" id="display_name" name="display_name" maxlength="255"
+             value="{{ user.display_name or '' }}" placeholder="{{ user.username }}">
+      <label for="email">{{ t(request, "users.new.email_label") }}</label>
+      <input type="email" id="email" name="email" maxlength="255" value="{{ user.email or '' }}">
+      <p class="hint">{{ t(request, "account.profile.email_hint") }}</p>
+      <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>{{ t(request, "account.language.heading") }}</h2>
+    <form method="post" action="/account/locale" class="form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="locale">{{ t(request, "account.language.label") }}</label>
+      <select id="locale" name="locale">
+        {% for locale in available_locales %}
+          <option value="{{ locale.code }}" {% if (user.locale or request.state.locale.code) == locale.code %}selected{% endif %}>{{ locale.label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ t(request, "account.language.help") }}</p>
+      <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    </form>
+  </section>
+
+  {% if user.auth_provider.value == 'local' %}
+    <section class="panel">
+      <h2>{{ t(request, "account.password.heading") }}</h2>
+      <form method="post" action="/account/password" class="form" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="current_password">{{ t(request, "account.password.current") }}</label>
+        <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
+        <label for="new_password">{{ t(request, "account.password.new") }}</label>
+        <input type="password" id="new_password" name="new_password" autocomplete="new-password"
+               minlength="{{ min_password_length }}" required>
+        <label for="confirm_password">{{ t(request, "account.password.confirm") }}</label>
+        <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password"
+               minlength="{{ min_password_length }}" required>
+        <button type="submit" class="button">{{ t(request, "account.password.change") }}</button>
+      </form>
+    </section>
+  {% endif %}
+
+  {% if user.auth_provider.value != 'oidc' %}
+    <section class="panel">
+      <h2>{{ t(request, "account.totp.heading") }}</h2>
+      {% if user.totp_enabled %}
+        <p class="hint">
+          {{ t(request, "account.totp.enabled_since", when=(user.totp_confirmed_at | local_time('%Y-%m-%d') if user.totp_confirmed_at else t(request, "account.totp.unknown"))) }}
+          {{ t(request, "account.totp.codes_remaining", count=unused_recovery_codes) }}
+        </p>
+        <form method="post" action="/account/totp/recovery-codes/regenerate" class="form" autocomplete="off">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label for="regen_code">{{ t(request, "account.totp.regen_label") }}</label>
+          <input type="text" id="regen_code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
+          <button type="submit" class="button button-secondary">{{ t(request, "account.totp.regen_button") }}</button>
+        </form>
+        <form method="post" action="/account/totp/disable" class="form stack-gap" autocomplete="off">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label for="disable_code">{{ t(request, "account.totp.disable_label") }}</label>
+          <input type="text" id="disable_code" name="code" autocomplete="one-time-code" required>
+          <button type="submit" class="button button-danger">{{ t(request, "account.totp.disable_button") }}</button>
+        </form>
+      {% else %}
+        <p class="hint">{{ t(request, "account.totp.not_enabled") }}</p>
+        <a href="/account/totp/enroll" class="button">{{ t(request, "account.totp.enable_button") }}</a>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% if user.auth_provider.value != 'oidc' %}
+    <section class="panel">
+      <h2>{{ t(request, "account.passkeys.heading") }}</h2>
+      <p class="hint">
+        {{ t(request, "account.passkeys.hint_before") }}
+        <a href="https://passkeys.dev/" target="_blank" rel="noopener">passkeys.dev</a>{{ t(request, "account.passkeys.hint_after") }}
+      </p>
+
+      {% if just_registered_webauthn %}
+        <div class="alert alert-ok"><p>{{ t(request, "account.passkeys.registered") }}</p></div>
+      {% endif %}
+
+      {% if webauthn_credentials %}
+        <table class="data-table">
+          <thead>
+            <tr><th>{{ t(request, "roles.table.name") }}</th><th>{{ t(request, "account.passkeys.type") }}</th><th>{{ t(request, "account.passkeys.added") }}</th><th>{{ t(request, "account.passkeys.last_used") }}</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for credential in webauthn_credentials %}
+            <tr>
+              <td>{{ credential.name }}</td>
+              <td>{{ t(request, "account.passkeys.synced") if credential.device_type == 'multi_device' else t(request, "account.passkeys.single_device") }}</td>
+              <td>{{ credential.created_at | local_time('%Y-%m-%d') }}</td>
+              <td>{{ credential.last_used_at | local_time('%Y-%m-%d %H:%M %Z') if credential.last_used_at else t(request, "users.never") }}</td>
+              <td>
+                <form method="post" action="/account/webauthn/{{ credential.id }}/delete" class="inline-form"
+                      data-confirm="{{ t(request, 'account.passkeys.remove_confirm') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="button button-danger">{{ t(request, "groups.detail.remove") }}</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="hint">{{ t(request, "account.passkeys.none_registered") }}</p>
+      {% endif %}
+
+      <form class="form stack-gap" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="webauthn_name">{{ t(request, "account.passkeys.name_label") }}</label>
+        <input type="text" id="webauthn_name" name="name" maxlength="100" placeholder="{{ t(request, 'account.passkeys.name_placeholder') }}">
+        <button type="button" class="button" data-webauthn-register>{{ t(request, "account.passkeys.add") }}</button>
+        <p class="hint" data-webauthn-status></p>
+      </form>
+    </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>{{ t(request, "users.edit.sessions") }}</h2>
+    <p class="hint">{{ t(request, "account.sessions.hint") }}</p>
+    <form method="post" action="/account/sessions/revoke-all" data-confirm="{{ t(request, 'account.sessions.confirm') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button button-secondary">{{ t(request, "account.sessions.logout_others") }}</button>
+    </form>
+  </section>
+
+{% endblock %}
+
+{% block extra_scripts %}
+  <script src="/static/js/webauthn.js" defer></script>
+{% endblock %}

@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "users.edit_title", username=(target_user.username | e)) | safe }} — ucc{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>{{ t(request, "users.edit_heading") }}</h1>
+    <form method="post" action="/users/{{ target_user.id }}/delete"
+          class="inline-form" data-confirm='{{ t(request, "users.delete_confirm", username=(target_user.username | e)) | safe }}'>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button button-danger">{{ t(request, "users.delete_user") }}</button>
+    </form>
+  </div>
+
+  {% if errors %}
+    <div class="alert alert-error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% if request.query_params.get('perm_error') %}
+    <div class="alert alert-error"><p>{{ request.query_params.get('perm_error') }}</p></div>
+  {% endif %}
+
+  <section class="panel">
+    <form method="post" action="/users/{{ target_user.id }}/edit" class="form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label for="username">{{ t(request, "users.table.username") }}</label>
+      <input type="text" id="username" name="username" required maxlength="64"
+             pattern="[a-z0-9][a-z0-9_.\-]{2,63}" value="{{ target_user.username }}">
+
+      <label for="display_name">{{ t(request, "account.profile.display_name") }}</label>
+      <input type="text" id="display_name" name="display_name" maxlength="255"
+             value="{{ target_user.display_name or '' }}">
+
+      <label for="email">{{ t(request, "users.new.email_label") }}</label>
+      <input type="email" id="email" name="email" maxlength="255"
+             value="{{ target_user.email or '' }}">
+      <p class="hint">{{ t(request, "users.new.email_hint") }}</p>
+
+      <label for="role_id">{{ t(request, "users.table.role") }}</label>
+      <select id="role_id" name="role_id" required>
+        {% for role in roles %}
+          <option value="{{ role.id }}" {{ 'selected' if role.id == target_user.role_id else '' }}>{{ role.name }}</option>
+        {% endfor %}
+      </select>
+
+      <label for="auth_provider">{{ t(request, "users.table.login_method") }}</label>
+      <select id="auth_provider" name="auth_provider" required>
+        {% for provider in auth_providers %}
+          <option value="{{ provider.value }}" {{ 'selected' if provider == target_user.auth_provider else '' }}>{{ provider.value }}</option>
+        {% endfor %}
+      </select>
+
+      <label for="password">{{ t(request, "users.edit.password_label") }}</label>
+      <input type="password" id="password" name="password" autocomplete="new-password" minlength="12">
+      <p class="hint">{{ t(request, "users.edit.password_hint") }}</p>
+
+      <label>
+        <input type="checkbox" name="is_active" {{ 'checked' if target_user.is_active else '' }}>
+        {{ t(request, "users.edit.active_label") }}
+      </label>
+
+      <label>{{ t(request, "users.new.restrict_fabrics_label") }}</label>
+      {% if all_fabrics %}
+        <div class="permission-grid">
+          {% for fabric in all_fabrics %}
+            <label>
+              <input type="checkbox" name="fabric_access" value="{{ fabric.id }}"
+                     {{ 'checked' if fabric.id | string in selected_fabric_ids else '' }}>
+              {{ fabric.name }}
+            </label>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="hint">{{ t(request, "users.new.no_fabrics") }}</p>
+      {% endif %}
+      <p class="hint">
+        {{ t(request, "users.edit.restrict_fabrics_hint") }}
+      </p>
+
+      <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+      <a class="button button-secondary" href="/users">{{ t(request, "common.cancel") }}</a>
+    </form>
+  </section>
+
+  {% if target_user.auth_provider.value == 'local' %}
+    <section class="panel">
+      <h2>{{ t(request, "users.edit.reset_password") }}</h2>
+      <p class="hint">{{ t(request, "users.edit.reset_password_hint") }}</p>
+      <form method="post" action="/users/{{ target_user.id }}/reset-password" class="form" autocomplete="off"
+            data-confirm="{{ t(request, 'users.edit.reset_password_confirm') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="new_password">{{ t(request, "users.edit.new_password") }}</label>
+        <input type="password" id="new_password" name="new_password" autocomplete="new-password" minlength="12" required>
+        <button type="submit" class="button button-secondary">{{ t(request, "users.edit.reset_password") }}</button>
+      </form>
+    </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>{{ t(request, "users.edit.temp_permissions") }}</h2>
+    <p class="hint">
+      {{ t(request, "users.edit.temp_permissions_hint") }}
+    </p>
+
+    {% set active_grants = temporary_grants | selectattr('is_active') | list %}
+    {% if active_grants %}
+      <table class="data-table">
+        <thead>
+          <tr><th>{{ t(request, "users.edit.permission_col") }}</th><th>{{ t(request, "users.edit.granted_by") }}</th><th>{{ t(request, "users.edit.expires") }}</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for grant in active_grants %}
+            <tr>
+              <td><code>{{ grant.permission.value }}</code></td>
+              <td>{{ grant.granted_by.username if grant.granted_by else '—' }}</td>
+              <td>{{ grant.expires_at | local_time('%Y-%m-%d %H:%M %Z') }}</td>
+              <td>
+                <form method="post"
+                      action="/users/{{ target_user.id }}/temporary-permissions/{{ grant.id }}/revoke"
+                      class="inline-form" data-confirm="{{ t(request, 'users.edit.revoke_confirm') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="button button-danger">{{ t(request, "users.edit.revoke") }}</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="hint">{{ t(request, "users.edit.no_active_grants") }}</p>
+    {% endif %}
+
+    <form method="post" action="/users/{{ target_user.id }}/temporary-permissions"
+          class="form stack-gap" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="temp_permission">{{ t(request, "users.edit.permission_col") }}</label>
+      <select id="temp_permission" name="permission" required>
+        {% for perm in all_permissions %}
+          <option value="{{ perm.value }}">{{ perm.value }}</option>
+        {% endfor %}
+      </select>
+      <label for="temp_hours">{{ t(request, "users.edit.duration_hours") }}</label>
+      <input type="number" id="temp_hours" name="hours" min="1" max="{{ max_grant_hours }}"
+             value="2" required>
+      <button type="submit" class="button">{{ t(request, "users.edit.grant") }}</button>
+    </form>
+
+    {% if temporary_grants | rejectattr('is_active') | list %}
+      <details class="stack-gap">
+        <summary>{{ t(request, "users.edit.history") }}</summary>
+        <table class="data-table">
+          <thead>
+            <tr><th>{{ t(request, "users.edit.permission_col") }}</th><th>{{ t(request, "users.edit.granted_by") }}</th><th>{{ t(request, "users.edit.granted") }}</th><th>{{ t(request, "users.edit.ended") }}</th></tr>
+          </thead>
+          <tbody>
+            {% for grant in temporary_grants | rejectattr('is_active') | list %}
+              <tr>
+                <td><code>{{ grant.permission.value }}</code></td>
+                <td>{{ grant.granted_by.username if grant.granted_by else '—' }}</td>
+                <td>{{ grant.granted_at | local_time('%Y-%m-%d %H:%M %Z') }}</td>
+                <td>
+                  {% if grant.revoked_at %}
+                    {{ t(request, "users.edit.revoked_at", when=(grant.revoked_at | local_time('%Y-%m-%d %H:%M %Z'))) }}
+                  {% else %}
+                    {{ t(request, "users.edit.expired_at", when=(grant.expires_at | local_time('%Y-%m-%d %H:%M %Z'))) }}
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </details>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>{{ t(request, "users.edit.sessions") }}</h2>
+    <form method="post" action="/users/{{ target_user.id }}/sessions/revoke-all"
+          data-confirm="{{ t(request, 'users.edit.logout_confirm') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button button-secondary">{{ t(request, "users.edit.logout_everywhere") }}</button>
+    </form>
+  </section>
+{% endblock %}

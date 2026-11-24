@@ -1,0 +1,216 @@
+"""Async client for the UniFi Site Manager API (`https://api.ui.com`).
+
+Read endpoints (`/v1/hosts`, `/v1/sites`, `/v1/devices`) are documented and
+stable. The connector proxy (`/v1/connector/consoles/{hostId}/...`) forwards a
+request to the console's own local API — what *writes* it accepts is not
+documented by Ubiquiti, see `scripts/probe_connector.py`.
+
+Response parsing is deliberately defensive (`.get()` everywhere, unknown
+fields ignored): the payload shape "may vary by UniFi Network version" per
+Ubiquiti's own spec, and a sync must never crash on one odd console.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any
+
+import httpx
+
+BASE_URL = "https://api.ui.com"
+_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
+
+class SiteManagerError(Exception):
+    """Any non-2xx answer or transport failure. `status` is 0 for a
+    transport-level error (DNS, TLS, timeout)."""
+
+    def __init__(self, message: str, status: int = 0) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+@dataclass(frozen=True)
+class HostInfo:
+    host_id: str
+    name: str | None
+    model: str | None
+    ip_address: str | None
+    is_online: bool
+    os_version: str | None
+    os_update_available: str | None
+    # (app name, version, update available)
+    apps: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SiteInfo:
+    site_id: str
+    host_id: str
+    internal_name: str | None
+    name: str | None
+
+
+@dataclass(frozen=True)
+class DeviceInfo:
+    host_id: str
+    mac: str
+    name: str | None
+    model: str | None
+    product_line: str | None
+    is_online: bool
+    version: str | None
+    update_available: str | None
+    is_console: bool
+
+
+def _str(value: Any) -> str | None:
+    return str(value) if value not in (None, "") else None
+
+
+def parse_host(raw: dict[str, Any]) -> HostInfo:
+    state = raw.get("reportedState") or {}
+    hardware = state.get("hardware") or {}
+    apps: list[tuple[str, str | None, str | None]] = []
+    for controller in state.get("controllers") or []:
+        if not isinstance(controller, dict) or not controller.get("name"):
+            continue
+        apps.append(
+            (
+                str(controller["name"]),
+                _str(controller.get("version")),
+                _str(controller.get("updateAvailable")),
+            )
+        )
+    firmware_update = state.get("firmwareUpdate") or {}
+    return HostInfo(
+        host_id=str(raw["id"]),
+        name=_str(state.get("name") or state.get("hostname")),
+        model=_str(hardware.get("shortname") or hardware.get("name")),
+        ip_address=_str(raw.get("ipAddress") or state.get("ip")),
+        is_online=str(state.get("state", "")).lower() == "connected",
+        os_version=_str(state.get("version") or hardware.get("firmwareVersion")),
+        os_update_available=_str(
+            firmware_update.get("latestAvailableVersion")
+            if isinstance(firmware_update, dict)
+            else None
+        ),
+        apps=apps,
+    )
+
+
+def parse_site(raw: dict[str, Any]) -> SiteInfo:
+    meta = raw.get("meta") or {}
+    return SiteInfo(
+        site_id=str(raw["siteId"]),
+        host_id=str(raw["hostId"]),
+        internal_name=_str(meta.get("name")),
+        name=_str(meta.get("desc") or meta.get("name")),
+    )
+
+
+def parse_devices(raw: dict[str, Any]) -> list[DeviceInfo]:
+    """One `/v1/devices` entry is a host with its `devices` list."""
+    host_id = str(raw.get("hostId", ""))
+    result: list[DeviceInfo] = []
+    for dev in raw.get("devices") or []:
+        if not isinstance(dev, dict) or not dev.get("mac"):
+            continue
+        result.append(
+            DeviceInfo(
+                host_id=host_id,
+                mac=str(dev["mac"]).lower(),
+                name=_str(dev.get("name")),
+                model=_str(dev.get("shortname") or dev.get("model")),
+                product_line=_str(dev.get("productLine")),
+                is_online=str(dev.get("status", "")).lower() == "online",
+                version=_str(dev.get("version")),
+                update_available=_str(dev.get("updateAvailable")),
+                is_console=bool(dev.get("isConsole")),
+            )
+        )
+    return result
+
+
+class SiteManagerClient:
+    """One API key's view of Site Manager. Use as an async context manager."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = BASE_URL,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=_TIMEOUT,
+            transport=transport,
+            headers={"X-API-Key": api_key, "Accept": "application/json"},
+        )
+
+    async def __aenter__(self) -> SiteManagerClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self._client.aclose()
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> Any:
+        try:
+            response = await self._client.request(method, path, params=params, json=json)
+        except httpx.HTTPError as exc:
+            raise SiteManagerError(f"{method} {path}: {exc}") from exc
+        if response.status_code >= 400:
+            raise SiteManagerError(
+                f"{method} {path}: HTTP {response.status_code} {response.text[:300]}",
+                status=response.status_code,
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise SiteManagerError(f"{method} {path}: response is not JSON") from exc
+
+    async def _paginate(self, path: str) -> AsyncIterator[dict[str, Any]]:
+        token: str | None = None
+        while True:
+            params: dict[str, Any] = {"pageSize": 200}
+            if token:
+                params["nextToken"] = token
+            payload = await self._request("GET", path, params=params)
+            for item in payload.get("data") or []:
+                if isinstance(item, dict):
+                    yield item
+            token = payload.get("nextToken")
+            if not token:
+                return
+
+    async def hosts(self) -> list[HostInfo]:
+        return [parse_host(h) async for h in self._paginate("/v1/hosts") if h.get("id")]
+
+    async def sites(self) -> list[SiteInfo]:
+        return [
+            parse_site(s)
+            async for s in self._paginate("/v1/sites")
+            if s.get("siteId") and s.get("hostId")
+        ]
+
+    async def devices(self) -> list[DeviceInfo]:
+        result: list[DeviceInfo] = []
+        async for entry in self._paginate("/v1/devices"):
+            result.extend(parse_devices(entry))
+        return result
+
+    async def connector(
+        self, host_id: str, method: str, path: str, *, json: dict[str, Any] | None = None
+    ) -> Any:
+        """Call a console's local API through the cloud connector proxy.
+        `path` is the console-local path, e.g. `/proxy/network/api/s/default/stat/device`."""
+        return await self._request(method, f"/v1/connector/consoles/{host_id}{path}", json=json)

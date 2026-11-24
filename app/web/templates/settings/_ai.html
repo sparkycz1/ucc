@@ -1,0 +1,127 @@
+  <section class="panel">
+    <h2>{{ t(request, "ai.title") }}</h2>
+    <p class="hint">
+      {{ t(request, "settings.ai.intro_before") }}
+      <a href="/ai">{{ t(request, "nav.ai") }}</a>{{ t(request, "settings.ai.intro_after") }}
+    </p>
+
+    {% for config in ai_configs %}
+      {% if not loop.first %}<hr>{% endif %}
+      <h3>{{ config.kind.value }}</h3>
+      <form method="post" action="/settings/ai/provider" class="form" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="kind" value="{{ config.kind.value }}">
+
+        <label>
+          <input type="checkbox" name="enabled" {{ 'checked' if config.enabled else '' }}>
+          {{ t(request, "settings.integrations.enabled") }}
+        </label>
+
+        <label for="api_key_{{ config.kind.value }}">{{ t(request, "settings.ai.api_key") }}</label>
+        <input type="password" id="api_key_{{ config.kind.value }}" name="api_key"
+               autocomplete="new-password"
+               placeholder="{{ t(request, 'settings.integrations.unchanged') if config.api_key_encrypted else '' }}">
+        <p class="hint">{{ t(request, "settings.integrations.leave_blank_hint") }}</p>
+
+        {% if config.kind.value == openai_compatible_kind %}
+          <label for="base_url_{{ config.kind.value }}">{{ t(request, "settings.ai.base_url") }}</label>
+          <input type="text" id="base_url_{{ config.kind.value }}" name="base_url"
+                 placeholder="https://litellm.example.com/v1"
+                 value="{{ config.base_url or '' }}">
+          <p class="hint">
+            {{ t(request, "settings.ai.base_url_hint") | safe }}
+          </p>
+        {% endif %}
+
+        <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+      </form>
+
+      <form method="post" action="/settings/ai/fetch-models" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="kind" value="{{ config.kind.value }}">
+        <button type="submit" class="button button-secondary">{{ t(request, "settings.ai.fetch_models_now") }}</button>
+      </form>
+      {% if config.models_fetched_at %}
+        <p class="hint">{{ t(request, "settings.ai.last_fetched", when=(config.models_fetched_at | local_time('%Y-%m-%d %H:%M %Z'))) }}</p>
+      {% endif %}
+
+      {% if config.models %}
+        {% set enabled_count = config.models | selectattr('enabled') | list | length %}
+        <p class="hint">
+          {{ t(request, "settings.ai.models_enabled_singular" if config.models | length == 1 else "settings.ai.models_enabled_plural", enabled=enabled_count, total=(config.models | length)) }}
+        </p>
+        <button type="button" class="button button-secondary"
+                popovertarget="models-modal-{{ config.kind.value }}">
+          {{ t(request, "settings.ai.choose_models") }}
+        </button>
+
+        <div id="models-modal-{{ config.kind.value }}" popover class="modal">
+          <div class="modal-dialog">
+            <div class="modal-header">
+              <h2 class="modal-title">{{ t(request, "settings.ai.choose_models_title", kind=(config.kind.value | e)) | safe }}</h2>
+              <button
+                type="button"
+                class="modal-close"
+                popovertarget="models-modal-{{ config.kind.value }}"
+                popovertargetaction="hide"
+                aria-label="{{ t(request, 'settings.ai.close') }}"
+              >
+                &times;
+              </button>
+            </div>
+            <div class="modal-body">
+              <input
+                type="search"
+                class="model-search-input"
+                placeholder="{{ t(request, 'settings.ai.filter_models_placeholder') }}"
+                aria-label="{{ t(request, 'settings.ai.filter_models_for', kind=(config.kind.value | e)) | safe }}"
+                data-model-search="models-list-{{ config.kind.value }}"
+              >
+              <form method="post" action="/settings/ai/models" class="form form-wide">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="kind" value="{{ config.kind.value }}">
+                <div class="model-list" id="models-list-{{ config.kind.value }}">
+                  {% for model in config.models %}
+                    <label class="model-row" data-model-row="{{ model.model_id | lower }}">
+                      <input type="checkbox" name="enabled_models" value="{{ model.model_id }}"
+                             {{ 'checked' if model.enabled else '' }}>
+                      {{ model.model_id }}
+                    </label>
+                  {% endfor %}
+                </div>
+                <button type="submit" class="button">{{ t(request, "settings.ai.save_model_selection") }}</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    <hr>
+    <h3>{{ t(request, "settings.ai.token_limits") }}</h3>
+    <p class="hint">
+      {{ t(request, "settings.ai.token_limits_hint_before") }}
+      <strong>{{ t(request, "settings.ai.rolling") }}</strong>{{ t(request, "settings.ai.token_limits_hint_after") }}
+    </p>
+    <form method="post" action="/settings/ai-limits" class="form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label for="ai_daily_token_limit">{{ t(request, "settings.ai.tokens_daily") }}</label>
+      <input type="number" id="ai_daily_token_limit" name="ai_daily_token_limit" min="0" step="1"
+             placeholder="{{ t(request, 'settings.ai.unlimited') }}"
+             value="{{ app_settings.ai_daily_token_limit if app_settings.ai_daily_token_limit is not none else '' }}">
+
+      <label for="ai_weekly_token_limit">{{ t(request, "settings.ai.tokens_weekly") }}</label>
+      <input type="number" id="ai_weekly_token_limit" name="ai_weekly_token_limit" min="0" step="1"
+             placeholder="{{ t(request, 'settings.ai.unlimited') }}"
+             value="{{ app_settings.ai_weekly_token_limit if app_settings.ai_weekly_token_limit is not none else '' }}">
+
+      <label for="ai_monthly_token_limit">{{ t(request, "settings.ai.tokens_monthly") }}</label>
+      <input type="number" id="ai_monthly_token_limit" name="ai_monthly_token_limit" min="0" step="1"
+             placeholder="{{ t(request, 'settings.ai.unlimited') }}"
+             value="{{ app_settings.ai_monthly_token_limit if app_settings.ai_monthly_token_limit is not none else '' }}">
+
+      <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    </form>
+
+  </section>

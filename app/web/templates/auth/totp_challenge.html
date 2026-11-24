@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="{{ request.state.locale.code }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ t(request, "totp_challenge.title") }} — ucc</title>
+  <link rel="icon" href="{{ favicon_href() or '/static/img/favicon.svg' }}">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="auth-body">
+  {% from "partials/_brand.html" import render as render_brand %}
+  <main class="auth-page">
+    <span class="brand">{{ render_brand('auth') }}</span>
+    <div class="panel">
+      <h2>{{ t(request, "totp_challenge.heading") }}</h2>
+
+      {% if error %}
+        <div class="alert alert-error"><p>{{ error }}</p></div>
+      {% endif %}
+
+      {% if show_totp_form %}
+        <p class="hint">
+          {{ t(request, "totp_challenge.code_hint") }}
+        </p>
+        <form method="post" action="/login/totp" class="form" autocomplete="off">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="next" value="{{ next }}">
+          <label for="code">{{ t(request, "totp_challenge.code") }}</label>
+          <input type="text" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required>
+          <button type="submit" class="button">{{ t(request, "totp_challenge.verify") }}</button>
+        </form>
+      {% endif %}
+
+      {% if has_webauthn %}
+        <form data-webauthn-login class="form stack-gap" autocomplete="off">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="next" value="{{ next }}">
+          {% if show_totp_form %}
+            <p class="hint">{{ t(request, "totp_challenge.or_use_key") }}</p>
+          {% else %}
+            <p class="hint">{{ t(request, "totp_challenge.sign_in_with_key") }}</p>
+          {% endif %}
+          <button type="button" class="button button-secondary" data-webauthn-login-button>
+            {{ t(request, "totp_challenge.use_passkey") }}
+          </button>
+          <p class="hint" data-webauthn-status></p>
+        </form>
+      {% endif %}
+    </div>
+  </main>
+  <script src="/static/js/webauthn.js" defer></script>
+</body>
+</html>

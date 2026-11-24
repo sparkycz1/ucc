@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "nav.fabrics") }} — ucc{% endblock %}
+
+{% block content %}
+  {% set current_user = request.state.user %}
+  <div class="page-header">
+    <h1>{{ t(request, "nav.fabrics") }}</h1>
+    {% if current_user.has_permission('fabric.manage') %}
+    <div class="page-header-actions">
+      <a class="button" href="/fabrics/new">{{ t(request, "fabrics.add") }}</a>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if fabrics %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>{{ t(request, "fabrics.table.name") }}</th>
+        <th>{{ t(request, "fabrics.table.consoles") }}</th>
+        <th>{{ t(request, "fabrics.table.devices") }}</th>
+        <th>{{ t(request, "fabrics.table.updates") }}</th>
+        <th>{{ t(request, "fabrics.table.last_sync") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for fabric in fabrics %}
+        {% set devices = fabric.consoles | map(attribute='devices') | sum(start=[]) %}
+        {% set updatable = devices | selectattr('update_available') | list | length
+                           + fabric.consoles | selectattr('os_update_available') | list | length %}
+        <tr>
+          <td>
+            <a href="/fabrics/{{ fabric.id }}">{{ fabric.name }}</a>
+            {% if not fabric.is_enabled %}<span class="badge">{{ t(request, "fabrics.disabled") }}</span>{% endif %}
+          </td>
+          <td>{{ fabric.consoles | length }}</td>
+          <td>{{ devices | length }}</td>
+          <td>{% if updatable %}<span class="badge badge-warn">{{ updatable }}</span>{% else %}—{% endif %}</td>
+          <td>
+            {% if fabric.last_sync_error %}
+              <span class="badge badge-error" title="{{ fabric.last_sync_error }}">{{ t(request, "fabrics.sync_failed") }}</span>
+            {% elif fabric.last_sync_at %}
+              {{ fabric.last_sync_at | local_time('%Y-%m-%d %H:%M %Z') }}
+            {% else %}
+              {{ t(request, "fabrics.never_synced") }}
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <section class="panel">
+      <p class="hint">{{ t(request, "fabrics.none_yet") }}</p>
+    </section>
+  {% endif %}
+{% endblock %}

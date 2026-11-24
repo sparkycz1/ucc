@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "users.new.title") }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "users.new.title") }}</h1>
+
+  {% if errors %}
+    <div class="alert alert-error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  <form method="post" action="/users" class="form" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <label for="username">{{ t(request, "users.table.username") }}</label>
+    <input type="text" id="username" name="username" required maxlength="64"
+           pattern="[a-z0-9][a-z0-9_.\-]{2,63}" value="{{ form.username or '' }}">
+    <p class="hint">{{ t(request, "users.new.username_hint") }}</p>
+
+    <label for="display_name">{{ t(request, "account.profile.display_name") }}</label>
+    <input type="text" id="display_name" name="display_name" maxlength="255" value="{{ form.display_name or '' }}">
+
+    <label for="email">{{ t(request, "users.new.email_label") }}</label>
+    <input type="email" id="email" name="email" maxlength="255" value="{{ form.email or '' }}">
+    <p class="hint">{{ t(request, "users.new.email_hint") }}</p>
+
+    <label for="role_id">{{ t(request, "users.table.role") }}</label>
+    <select id="role_id" name="role_id" required>
+      <option value="" disabled {{ 'selected' if not form.role_id else '' }}>{{ t(request, "users.new.choose_role") }}</option>
+      {% for role in roles %}
+        <option value="{{ role.id }}" {{ 'selected' if form.role_id == role.id | string else '' }}>{{ role.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="auth_provider">{{ t(request, "users.table.login_method") }}</label>
+    <select id="auth_provider" name="auth_provider" required>
+      {% for provider in auth_providers %}
+        <option value="{{ provider.value }}" {{ 'selected' if form.auth_provider == provider else '' }}>{{ provider.value }}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">
+      {{ t(request, "users.new.auth_provider_hint") }}
+    </p>
+
+    <label for="password">{{ t(request, "users.new.password_label") }}</label>
+    <input type="password" id="password" name="password" autocomplete="new-password" minlength="12">
+    <p class="hint">{{ t(request, "users.new.password_hint") }}</p>
+
+    <label>{{ t(request, "users.new.restrict_fabrics_label") }}</label>
+    {% if all_fabrics %}
+      <div class="permission-grid">
+        {% for fabric in all_fabrics %}
+          <label>
+            <input type="checkbox" name="fabric_access" value="{{ fabric.id }}"
+                   {{ 'checked' if fabric.id | string in selected_fabric_ids else '' }}>
+            {{ fabric.name }}
+          </label>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="hint">{{ t(request, "users.new.no_fabrics") }}</p>
+    {% endif %}
+    <p class="hint">
+      {{ t(request, "users.new.restrict_fabrics_hint") }}
+    </p>
+
+    <button type="submit" class="button">{{ t(request, "users.new.create") }}</button>
+    <a class="button button-secondary" href="/users">{{ t(request, "common.cancel") }}</a>
+  </form>
+{% endblock %}

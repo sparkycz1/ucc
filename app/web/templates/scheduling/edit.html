@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "scheduling.edit_title", name=(task.name | e)) | safe }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "scheduling.edit_title", name=(task.name | e)) | safe }}</h1>
+  {% if task.last_run_summary %}
+    <p class="hint">
+      {{ t(request, "scheduling.last_run", when=(task.last_run_at | local_time('%Y-%m-%d %H:%M %Z')), summary=(task.last_run_summary | e)) | safe }}
+    </p>
+  {% endif %}
+  {% set form_action = "/scheduling/" ~ task.id ~ "/edit" %}
+  {% include "partials/scheduled_task_form.html" with context %}
+{% endblock %}

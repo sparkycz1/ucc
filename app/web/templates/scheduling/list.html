@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "nav.scheduling") }} — ucc{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>{{ t(request, "nav.scheduling") }}</h1>
+    <div class="page-header-actions">
+      <a class="button" href="/scheduling/new">{{ t(request, "scheduling.new") }}</a>
+    </div>
+  </div>
+
+  {% if ran %}
+    <div class="alert alert-ok"><p>{{ t(request, "scheduling.run_enqueued") }}</p></div>
+  {% endif %}
+
+  {% if tasks %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "roles.table.name") }}</th>
+          <th>{{ t(request, "scheduling.table.applies_to") }}</th>
+          <th>{{ t(request, "audit.table.action") }}</th>
+          <th>{{ t(request, "scheduling.table.cron") }}</th>
+          <th>{{ t(request, "dashboard.scheduling.next_run") }}</th>
+          <th>{{ t(request, "scheduling.table.last_run") }}</th>
+          <th>{{ t(request, "users.table.status") }}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+          <tr>
+            <td><a href="/scheduling/{{ task.id }}/edit">{{ task.name }}</a></td>
+            <td>
+              {% if task.target_type.value == 'all_fabrics' %}
+                {{ t(request, "scheduling.target_all_fabrics") }}
+              {% elif task.target_type.value == 'site' %}
+                {{ t(request, "scheduling.target_site", name=((task.target_site.name or task.target_site.site_id) if task.target_site else t(request, "scheduling.deleted"))) }}
+              {% else %}
+                {{ t(request, "scheduling.target_fabric", name=(task.target_fabric.name if task.target_fabric else t(request, "scheduling.deleted"))) }}
+              {% endif %}
+            </td>
+            <td>{{ action_labels.get(task.action, task.action) }}</td>
+            <td><code>{{ task.cron_expression }}</code></td>
+            <td>
+              {% if task.is_enabled and task.next_run_at %}
+                {{ task.next_run_at | local_time('%Y-%m-%d %H:%M %Z') }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>
+              {% if task.last_run_at %}
+                {{ task.last_run_at | local_time('%Y-%m-%d %H:%M %Z') }}
+                <br><span class="hint">{{ task.last_run_summary }}</span>
+              {% else %}
+                {{ t(request, "users.never") }}
+              {% endif %}
+            </td>
+            <td>
+              {% if task.is_enabled %}
+                <span class="badge badge-ok">{{ t(request, "scheduling.enabled") }}</span>
+              {% else %}
+                <span class="badge badge-warn">{{ t(request, "scheduling.disabled") }}</span>
+              {% endif %}
+            </td>
+            <td>
+              <form method="post" action="/scheduling/{{ task.id }}/run-now" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="button button-secondary">{{ t(request, "scheduling.run_now") }}</button>
+              </form>
+              <form method="post" action="/scheduling/{{ task.id }}/toggle" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="button button-secondary">
+                  {{ t(request, "scheduling.disable") if task.is_enabled else t(request, "scheduling.enable") }}
+                </button>
+              </form>
+              <a class="button button-secondary" href="/scheduling/{{ task.id }}/history">{{ t(request, "scheduling.history.link") }}</a>
+              <a class="button button-secondary" href="/scheduling/{{ task.id }}/edit">{{ t(request, "roles.edit") }}</a>
+              <form method="post" action="/scheduling/{{ task.id }}/delete" class="inline-form"
+                    data-confirm="{{ t(request, 'scheduling.delete_confirm', name=(task.name | e)) | safe }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="button button-danger">{{ t(request, "scheduling.delete") }}</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty-state">
+      <p>{{ t(request, "scheduling.empty") }}</p>
+    </div>
+  {% endif %}
+{% endblock %}

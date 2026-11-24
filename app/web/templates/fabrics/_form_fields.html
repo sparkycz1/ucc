@@ -1,0 +1,18 @@
+    <label for="name">{{ t(request, "fabrics.table.name") }}</label>
+    <input type="text" id="name" name="name" required maxlength="255" value="{{ form.name or '' }}">
+
+    <label for="description">{{ t(request, "fabrics.form.description") }}</label>
+    <textarea id="description" name="description" rows="2">{{ form.description or '' }}</textarea>
+
+    <label for="api_key">{{ t(request, "fabrics.form.api_key") }}</label>
+    <input type="password" id="api_key" name="api_key" maxlength="512" autocomplete="off"
+           {{ '' if fabric else 'required' }}>
+    <p class="hint">
+      {% if fabric %}{{ t(request, "fabrics.form.api_key_keep_hint") }}{% else %}{{ t(request, "fabrics.form.api_key_hint") }}{% endif %}
+    </p>
+
+    <label>
+      <input type="checkbox" name="is_enabled" value="1" {{ 'checked' if form.is_enabled else '' }}>
+      {{ t(request, "fabrics.form.enabled") }}
+    </label>
+    <p class="hint">{{ t(request, "fabrics.form.enabled_hint") }}</p>

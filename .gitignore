@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Virtual envs
+.venv/
+venv/
+
+# uv
+uv.lock.tmp
+
+# Secrets / config — never commit real values
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code — agent worktrees and local session state, never source
+.claude/
+
+# Docker
+docker-compose.override.yml
+
+
+# scripts/probe_connector.py output — contains your UniFi inventory
+probe_output/

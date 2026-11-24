@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "users.title") }} — ucc{% endblock %}
+
+{% block content %}
+  {% set current_user = request.state.user %}
+  <div class="page-header">
+    <h1>{{ t(request, "users.title") }}</h1>
+    <div class="page-header-actions">
+      <a class="button button-secondary" href="/roles">{{ t(request, "nav.roles") }}</a>
+      <a class="button" href="/users/new">{{ t(request, "users.add") }}</a>
+    </div>
+  </div>
+
+  {% if bulk_error %}
+    <div class="alert alert-error"><p>{{ bulk_error }}</p></div>
+  {% endif %}
+
+  {# The bulk-actions <form> itself stays empty — HTML forbids nesting a
+     <form> inside another <form> (a browser silently drops the inner
+     start tag rather than erroring, which used to make each row's own
+     impersonate mini-form below submit to *this* form instead — no
+     `action` here means "current URL", so it silently hit POST /users,
+     the create-user endpoint, with none of its required fields). Every
+     control that logically belongs to this form (the row checkboxes, the
+     bulk buttons, the role <select>) instead references it from outside
+     via the standard `form="bulk-actions-form"` attribute, so the table
+     — and each row's own separate, non-nested <form> — can sit as a
+     sibling rather than a descendant. #}
+  <form method="post" class="form form-wide" id="bulk-actions-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  </form>
+
+  <table class="data-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" data-select-all="user_ids" form="bulk-actions-form" aria-label="{{ t(request, 'users.bulk.select_all') }}"></th>
+          <th>{{ t(request, "users.table.username") }}</th>
+          <th>{{ t(request, "users.table.role") }}</th>
+          <th>{{ t(request, "users.table.login_method") }}</th>
+          <th>{{ t(request, "users.table.two_fa") }}</th>
+          <th>{{ t(request, "users.table.status") }}</th>
+          <th>{{ t(request, "users.table.last_login") }}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+          <tr>
+            <td>
+              {% if u.id != current_user.id %}
+                <input type="checkbox" name="user_ids" value="{{ u.id }}" form="bulk-actions-form" aria-label="{{ t(request, 'users.bulk.select_one', name=(u.display_name or u.username)) }}">
+              {% endif %}
+            </td>
+            <td>{{ u.display_name or u.username }}</td>
+            <td>{{ u.role.name }}</td>
+            <td>{{ u.auth_provider.value }}</td>
+            <td>{{ 'on' if u.totp_enabled else '—' }}</td>
+            <td>
+              {% if u.is_active %}
+                <span class="badge badge-ok">{{ t(request, "users.status.active") }}</span>
+              {% else %}
+                <span class="badge badge-error">{{ t(request, "users.status.disabled") }}</span>
+              {% endif %}
+            </td>
+            <td>{{ u.last_login_at | local_time('%Y-%m-%d %H:%M %Z') if u.last_login_at else t(request, "users.never") }}</td>
+            <td>
+              <a href="/users/{{ u.id }}/edit">{{ t(request, "users.edit") }}</a>
+              {% if current_user.has_permission('user.impersonate') and u.id != current_user.id and u.is_active and not u.has_permission('user.impersonate') %}
+                <form method="post" action="/users/{{ u.id }}/impersonate" class="inline-form"
+                      data-confirm="{{ t(request, 'users.impersonate.confirm', name=(u.display_name or u.username)) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="link-button">{{ t(request, "users.impersonate") }}</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+  </table>
+
+  <div class="page-header-actions stack-gap" id="bulk-actions-bar">
+      <span class="hint">{{ t(request, "users.bulk.with_selected") }}</span>
+      <button type="submit" form="bulk-actions-form" formaction="/users/bulk/deactivate" class="button button-secondary">
+        {{ t(request, "users.bulk.deactivate") }}
+      </button>
+      <button type="submit" form="bulk-actions-form" formaction="/users/bulk/activate" class="button button-secondary">
+        {{ t(request, "users.bulk.activate") }}
+      </button>
+      <button type="submit" form="bulk-actions-form" formaction="/users/bulk/sign-out" class="button button-secondary">
+        {{ t(request, "users.bulk.sign_out") }}
+      </button>
+      <select name="role_id" form="bulk-actions-form" aria-label="{{ t(request, 'users.bulk.role_for') }}">
+        {% for role in roles %}
+          <option value="{{ role.id }}">{{ role.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" form="bulk-actions-form" formaction="/users/bulk/role" class="button">
+        {{ t(request, "users.bulk.set_role") }}
+      </button>
+  </div>
+{% endblock %}

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "dashboard.title") }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "dashboard.title") }}</h1>
+
+  {% if inventory_stats %}
+  <section class="panel">
+    <h2>{{ t(request, "nav.fabrics") }}</h2>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.fabrics }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.fabrics") }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.consoles }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.consoles") }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.consoles_with_update }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.consoles_with_update") }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.devices }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.devices") }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.devices_with_update }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.devices_with_update") }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.devices_offline }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.devices_offline") }}</span>
+      </div>
+      {% if inventory_stats.fabrics_failing %}
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.fabrics_failing }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.fabrics_failing") }}</span>
+      </div>
+      {% endif %}
+    </div>
+    <p class="hint"><a href="/fabrics">{{ t(request, "dashboard.all_fabrics") }}</a></p>
+  </section>
+  {% endif %}
+
+  {% if upcoming_tasks is defined %}
+  <section class="panel">
+    <h2>{{ t(request, "nav.scheduling") }}</h2>
+    <p class="hint">{{ t(request, "dashboard.scheduling.enabled_count", count=enabled_task_count) }}</p>
+    {% if upcoming_tasks %}
+      <table class="data-table">
+        <thead><tr><th>{{ t(request, "dashboard.scheduling.task") }}</th><th>{{ t(request, "dashboard.scheduling.next_run") }}</th></tr></thead>
+        <tbody>
+          {% for task in upcoming_tasks %}
+          <tr>
+            <td>{{ task.name }}</td>
+            <td>{{ task.next_run_at | local_time('%Y-%m-%d %H:%M %Z') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="hint">{{ t(request, "dashboard.scheduling.none_enabled") }}</p>
+    {% endif %}
+    <p class="hint"><a href="/scheduling">{{ t(request, "dashboard.scheduling.all_tasks") }}</a></p>
+  </section>
+  {% endif %}
+
+  {% if recent_audit_entries is defined %}
+  <section class="panel">
+    <h2>{{ t(request, "dashboard.activity.heading") }}</h2>
+    {% if recent_denied_count %}
+      <p class="hint">{{ t(request, "dashboard.activity.denied_count", count=recent_denied_count) }}</p>
+    {% endif %}
+    {% if recent_audit_entries %}
+      <table class="data-table">
+        <thead><tr><th>{{ t(request, "dashboard.activity.when") }}</th><th>{{ t(request, "dashboard.activity.who") }}</th><th>{{ t(request, "dashboard.activity.action") }}</th><th>{{ t(request, "dashboard.activity.outcome") }}</th></tr></thead>
+        <tbody>
+          {% for entry in recent_audit_entries %}
+          <tr>
+            <td>{{ entry.created_at | local_time('%Y-%m-%d %H:%M %Z') }}</td>
+            <td>{{ entry.actor or '—' }}</td>
+            <td>{{ entry.summary }}</td>
+            <td>
+              {% if entry.outcome.value == 'success' %}<span class="badge badge-ok">{{ t(request, "dashboard.activity.outcome_success") }}</span>
+              {% elif entry.outcome.value == 'denied' %}<span class="badge badge-warn">{{ t(request, "dashboard.activity.outcome_denied") }}</span>
+              {% else %}<span class="badge badge-error">{{ entry.outcome.value }}</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="hint">{{ t(request, "dashboard.activity.none_yet") }}</p>
+    {% endif %}
+    <p class="hint"><a href="/audit">{{ t(request, "dashboard.activity.full_log") }}</a></p>
+  </section>
+  {% endif %}
+
+  {% if not inventory_stats and upcoming_tasks is not defined and recent_audit_entries is not defined %}
+  <section class="panel">
+    <p class="hint">{{ t(request, "dashboard.no_access") }}</p>
+  </section>
+  {% endif %}
+{% endblock %}

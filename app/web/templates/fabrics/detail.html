@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}{{ fabric.name }} — ucc{% endblock %}
+
+{% block content %}
+  {% set current_user = request.state.user %}
+  <div class="page-header" data-live-fabric-id="{{ fabric.id }}" data-live-fabric-name="{{ fabric.name }}">
+    <h1>
+      {{ fabric.name }}
+      {% if not fabric.is_enabled %}<span class="badge">{{ t(request, "fabrics.disabled") }}</span>{% endif %}
+    </h1>
+    <div class="page-header-actions">
+      <form method="post" action="/fabrics/{{ fabric.id }}/sync" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="button button-secondary">{{ t(request, "fabrics.sync_now") }}</button>
+      </form>
+      {% if current_user.has_permission('fabric.manage') %}
+        <a class="button button-secondary" href="/fabrics/{{ fabric.id }}/edit">{{ t(request, "fabrics.edit") }}</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if fabric.description %}<p class="hint">{{ fabric.description }}</p>{% endif %}
+
+  {% if sync_queued %}
+    <div class="alert alert-ok"><p>{{ t(request, "fabrics.sync_queued") }}</p></div>
+  {% endif %}
+
+  <div id="fabric-inventory"
+       hx-get="/fabrics/{{ fabric.id }}/inventory-panel"
+       hx-trigger="every 120s, live-inventory from:body"
+       hx-swap="innerHTML">
+    {% include "fabrics/_inventory.html" %}
+  </div>
+{% endblock %}
+
+{% block extra_scripts %}
+  <script src="/static/js/live-updates.js" defer></script>
+{% endblock %}

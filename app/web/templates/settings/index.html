@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "partials/_tabnav.html" import render as render_tabnav %}
+
+{% block title %}{{ t(request, "nav.settings") }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "nav.settings") }}</h1>
+
+  {{ render_tabnav(tabs, active_tab) }}
+
+  {% if errors %}
+    <div class="alert alert-error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% if active_tab == 'security' %}
+    {% include "settings/_security.html" %}
+  {% elif active_tab == 'integrations' %}
+    {% include "settings/_integrations.html" %}
+  {% elif active_tab == 'ai' %}
+    {% include "settings/_ai.html" %}
+  {% else %}
+    {% include "settings/_checks.html" %}
+  {% endif %}
+{% endblock %}

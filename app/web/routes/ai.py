@@ -1,0 +1,515 @@
+"""The AI assistant's web routes — the chat UI, and the confirm/discard
+gate in front of every action it proposes.
+
+Everything here requires a browser session and a CSRF token.
+
+**The confirm gate.** `POST .../messages/{message_id}/confirm` is the only
+place in this application where an AI-proposed action can execute. It is:
+
+- CSRF-protected (`Depends(verify_csrf)`), so it cannot be triggered
+  cross-site;
+- scoped to the conversation's owner, so nobody can confirm someone else's
+  proposal;
+- gated on the *current* permission for that specific tool, re-read from
+  the user's role at this moment (permission check #3 — see
+  `app.ai.tools`), so a role downgrade takes effect immediately even for a
+  proposal written before it;
+- restricted to entries still marked `pending`, so one proposal can be
+  executed exactly once;
+- audit-logged with the literal command and every resolved target.
+
+Nothing else — not the chat route, not the Celery turn task, not the tool
+layer — executes an action. `app/tasks/ai_jobs.py` only ever *records* a
+proposal. No mutating tool exists yet (see `app.ai.tools`), so today every
+confirm attempt is refused as an unknown action.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+# NOT the builtin `TimeoutError` — Celery raises its own subclass-less
+# exception type from `AsyncResult.get(timeout=...)`.
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.ai.base import AiProviderError, BaseAiClient
+from app.ai.config import get_or_create_ai_provider_configs, get_selectable_models
+from app.ai.providers import build_client
+from app.ai.tools import missing_permission
+from app.audit import log_event
+from app.auth.dependencies import get_current_user, require_permission
+from app.core.csrf import verify_csrf
+from app.db.models.ai_conversation import AiConversation, derive_title
+from app.db.models.ai_message import AiMessage, AiMessageRole, PendingActionStatus
+from app.db.models.ai_model import AiModel
+from app.db.models.ai_provider import AiProviderConfig
+from app.db.models.audit_log import AuditOutcome
+from app.db.models.role import Permission
+from app.db.models.user import User
+from app.db.session import get_db
+from app.tasks import ai_jobs
+from app.web.templating import templates
+
+router = APIRouter(
+    prefix="/ai", dependencies=[Depends(require_permission(Permission.AI_ACCESS))]
+)
+
+# How long the web request waits for the background turn. Comfortably above
+# the provider client's own 90s per-call ceiling would mean holding a web
+# worker for minutes; 90s matches one slow call plus change, and a timeout
+# is reported honestly rather than hidden.
+_TURN_WAIT_SECONDS = 90
+
+
+async def _get_conversation(
+    db: AsyncSession, conversation_id: uuid.UUID, user: User
+) -> AiConversation:
+    """A conversation is visible only to the account that created it — the
+    query filters on `user_id`, so another user (admin included) gets a 404
+    rather than a 403. 404 is the deliberate choice, matching how this app
+    treats a Fabric id that doesn't exist: a 403 would confirm that
+    somebody else's conversation with that id does exist."""
+    result = await db.execute(
+        select(AiConversation).where(
+            AiConversation.id == conversation_id, AiConversation.user_id == user.id
+        )
+    )
+    conversation = result.scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found."
+        )
+    return conversation
+
+
+async def _get_messages(db: AsyncSession, conversation_id: uuid.UUID) -> list[AiMessage]:
+    result = await db.execute(
+        select(AiMessage)
+        .where(AiMessage.conversation_id == conversation_id)
+        .order_by(AiMessage.created_at, AiMessage.id)
+    )
+    return list(result.scalars().all())
+
+
+def _is_awaiting_reply(messages: list[AiMessage]) -> bool:
+    """True once the human's turn has been sent but the assistant hasn't
+    answered yet — the compose form disables itself and
+    `partials/ai_messages_panel.html` polls for the reply while this holds."""
+    return bool(messages) and messages[-1].role == AiMessageRole.USER
+
+
+async def _render_conversation(
+    request: Request, db: AsyncSession, conversation: AiConversation, errors: list[str]
+) -> Response:
+    messages = await _get_messages(db, conversation.id)
+    return templates.TemplateResponse(
+        request,
+        "ai/conversation.html",
+        {
+            "conversation": conversation,
+            "messages": messages,
+            "awaiting_reply": _is_awaiting_reply(messages),
+            "errors": errors,
+            "csrf_token": request.state.csrf_token,
+        },
+    )
+
+
+async def _send_user_message(
+    db: AsyncSession, conversation: AiConversation, client: BaseAiClient, text: str
+) -> None:
+    """Persists one human message and enqueues the turn that answers it —
+    shared by `post_message` (an existing conversation's compose box) and
+    `create_conversation` (the "New conversation" form's own message field,
+    which used to only *name* the conversation from this text and silently
+    throw the text itself away, never actually sending it — see that
+    route's own comment)."""
+    db.add(
+        AiMessage(
+            conversation_id=conversation.id,
+            role=AiMessageRole.USER,
+            content=text,
+            provider_native=[client.build_user_message(text)],
+        )
+    )
+    await db.commit()
+    ai_jobs.run_ai_turn.delay(str(conversation.id))
+
+
+async def _render_messages_panel(
+    request: Request, db: AsyncSession, conversation: AiConversation
+) -> Response:
+    """The self-polling fragment — see `partials/ai_messages_panel.html`.
+    No `errors`: a mid-conversation provider failure is persisted as a
+    normal (if unhappy-looking) assistant message by `_run_turn`/
+    `_persist_assistant_error`, so it shows up as the next polled message
+    rather than needing a separate error channel here."""
+    messages = await _get_messages(db, conversation.id)
+    return templates.TemplateResponse(
+        request,
+        "partials/ai_messages_panel.html",
+        {
+            "conversation": conversation,
+            "messages": messages,
+            "awaiting_reply": _is_awaiting_reply(messages),
+            "csrf_token": request.state.csrf_token,
+        },
+    )
+
+
+@router.get("")
+async def list_conversations(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    result = await db.execute(
+        select(AiConversation)
+        .where(AiConversation.user_id == user.id)
+        .order_by(AiConversation.updated_at.desc(), AiConversation.created_at.desc())
+    )
+    conversations = list(result.scalars().all())
+    # Creating the five provider rows lazily here as well as on the Settings
+    # page keeps `get_selectable_models` meaningful before an admin has ever
+    # opened Settings.
+    await get_or_create_ai_provider_configs(db)
+    selectable = await get_selectable_models(db)
+    return templates.TemplateResponse(
+        request,
+        "ai/list.html",
+        {
+            "conversations": conversations,
+            "selectable_models": selectable,
+            "can_manage_settings": user.has_permission(Permission.SETTINGS_MANAGE),
+            "csrf_token": request.state.csrf_token,
+        },
+    )
+
+
+async def _start_conversation(
+    request: Request,
+    db: AsyncSession,
+    user: User,
+    *,
+    provider_id: uuid.UUID,
+    model_id: str,
+    text: str,
+    audit_summary: str,
+) -> Response:
+    """Everything past "we have a validated provider/model and the first
+    message's text" for `create_conversation`."""
+    # Re-check that this provider+model really is enabled — never trust the
+    # caller just because a dropdown offered it.
+    result = await db.execute(
+        select(AiModel, AiProviderConfig)
+        .join(AiProviderConfig, AiProviderConfig.id == AiModel.provider_id)
+        .where(
+            AiModel.provider_id == provider_id,
+            AiModel.model_id == model_id,
+            AiModel.enabled,
+            AiProviderConfig.enabled,
+        )
+    )
+    row = result.first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That AI model isn't enabled for use.",
+        )
+    _model, provider = row
+
+    try:
+        client = build_client(provider)
+    except AiProviderError:
+        # Same provider row just confirmed enabled above — a config problem
+        # here is the operator's to fix on the Settings AI tab, not
+        # something to explain on this simpler form.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This provider isn't fully configured — check Settings.",
+        ) from None
+
+    conversation = AiConversation(
+        user_id=user.id,
+        title=derive_title(text),
+        provider_id=provider_id,
+        model_id=model_id,
+    )
+    db.add(conversation)
+    await db.commit()
+    await db.refresh(conversation)
+
+    await _send_user_message(db, conversation, client, text)
+
+    await log_event(
+        db,
+        request=request,
+        action="ai.conversation.create",
+        summary=audit_summary,
+        target_type="ai_conversation",
+        target_id=conversation.id,
+        target_label=conversation.title,
+        details={"model": conversation.model_id},
+    )
+
+    return RedirectResponse(
+        url=f"/ai/conversations/{conversation.id}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@router.post("/conversations", dependencies=[Depends(verify_csrf)])
+async def create_conversation(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    provider_model: str = Form(""),
+    first_message: str = Form(""),
+) -> Response:
+    """`provider_model` is a single `"<provider_id>:<model_id>"` select
+    value rather than two fields, so the pair can never be mismatched by a
+    hand-crafted form post — it's re-validated against the enabled
+    provider/model rows in `_start_conversation` regardless.
+
+    `first_message`, despite the name, used to only *name* the new
+    conversation (`derive_title`) — the text itself was thrown away, and
+    the "New conversation" page told you as much ("you'll send the actual
+    message on the next page"). That's a real trap: typing an actual
+    question into a field labeled "What do you need?" and having it
+    silently vanish is not what anyone reading that label expects, and it
+    reads as "the assistant didn't respond" the same way the timeout bug
+    this same release fixed did. It's a real first message now, same as
+    typing it into an existing conversation's compose box.
+    """
+    text = first_message.strip()
+    raw = provider_model.strip()
+    provider_id_str, _, model_id = raw.partition(":")
+    if not text:
+        return RedirectResponse(url="/ai", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        provider_id = uuid.UUID(provider_id_str)
+    except ValueError:
+        return RedirectResponse(url="/ai", status_code=status.HTTP_303_SEE_OTHER)
+
+    return await _start_conversation(
+        request,
+        db,
+        user,
+        provider_id=provider_id,
+        model_id=model_id,
+        text=text,
+        audit_summary=f'Started an AI conversation ("{derive_title(text)}")',
+    )
+
+
+@router.get("/conversations/{conversation_id}")
+async def show_conversation(
+    request: Request,
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    conversation = await _get_conversation(db, conversation_id, user)
+    return await _render_conversation(request, db, conversation, [])
+
+
+@router.get("/conversations/{conversation_id}/messages-panel")
+async def conversation_messages_panel(
+    request: Request,
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Polled every ~2s by `partials/ai_messages_panel.html` while
+    `awaiting_reply` — a plain DB read, no provider call of its own — so the
+    conversation page picks up the assistant's reply as soon as `_run_turn`
+    commits it, instead of the human having to reload."""
+    conversation = await _get_conversation(db, conversation_id, user)
+    return await _render_messages_panel(request, db, conversation)
+
+
+@router.post("/conversations/{conversation_id}/messages", dependencies=[Depends(verify_csrf)])
+async def post_message(
+    request: Request,
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    message: str = Form(""),
+) -> Response:
+    """Persists the human's message and enqueues the reply, but does **not**
+    wait for it — see `partials/ai_messages_panel.html`'s self-poll for how
+    the reply actually shows up. This used to block the whole request on
+    `AsyncResult.get(timeout=90)`, which was two bugs stacked on each other:
+    a turn can make up to 5 sequential provider calls at up to 90s each
+    (`MAX_TOOL_ROUNDTRIPS`/`CHAT_TIMEOUT_SECONDS` in `app/ai/tools.py`/`providers.py`)
+    — comfortably longer than a 90s wait *or* the Celery task's own 60s
+    default time limit, which could (and did) kill the task outright before
+    either timeout ever fired, silently. Not waiting at all sidesteps both:
+    there's no web-request timeout to size against an unpredictable model,
+    and the fixed `time_limit` on the task itself
+    (`app.tasks.ai_jobs._AI_TURN_TIME_LIMIT_SECONDS`) only has to be a true
+    "this is stuck" ceiling, not a number a normal reply has to race.
+    """
+    conversation = await _get_conversation(db, conversation_id, user)
+    text = message.strip()
+    if not text:
+        return await _render_conversation(request, db, conversation, ["Write a message first."])
+
+    provider = conversation.provider
+    if provider is None or not provider.enabled:
+        return await _render_conversation(
+            request, db, conversation, ["This conversation's AI provider is no longer enabled."]
+        )
+    try:
+        client = build_client(provider)
+    except AiProviderError as exc:
+        return await _render_conversation(request, db, conversation, [str(exc)])
+
+    if conversation.title in ("", "New conversation"):
+        conversation.title = derive_title(text)
+
+    await _send_user_message(db, conversation, client, text)
+
+    return RedirectResponse(
+        url=f"/ai/conversations/{conversation.id}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+async def _get_pending_action(
+    db: AsyncSession, conversation: AiConversation, message_id: uuid.UUID, index: int
+) -> tuple[AiMessage, list[dict[str, Any]], dict[str, Any]]:
+    message = await db.get(AiMessage, message_id)
+    if message is None or message.conversation_id != conversation.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found.")
+    actions = list(message.pending_actions or [])
+    if index < 0 or index >= len(actions):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action not found.")
+    return message, actions, dict(actions[index])
+
+
+def _store_actions(
+    message: AiMessage, actions: list[dict[str, Any]], index: int, entry: dict[str, Any]
+) -> None:
+    """Write one modified entry back.
+
+    A *new* list of new dicts is assigned rather than mutating the existing
+    one in place: SQLAlchemy's plain `JSON` column doesn't track in-place
+    mutation of the Python object it handed out, so an in-place edit would
+    simply never be written to the database.
+    """
+    updated = [dict(action) for action in actions]
+    updated[index] = entry
+    message.pending_actions = updated
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/confirm",
+    dependencies=[Depends(verify_csrf)],
+)
+async def confirm_action(
+    request: Request,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    action_index: int = Form(0),
+) -> Response:
+    """Execute one proposed action. See this module's docstring — this is
+    the only code path in the application that can."""
+    conversation = await _get_conversation(db, conversation_id, user)
+    message, actions, entry = await _get_pending_action(db, conversation, message_id, action_index)
+
+    if entry.get("status") != PendingActionStatus.PENDING.value:
+        return await _render_conversation(
+            request, db, conversation, ["That action has already been handled."]
+        )
+
+    tool_name = str(entry.get("tool") or "")
+    # Permission check #3 — current role, right now, not when the proposal
+    # was written.
+    denied = missing_permission(user, tool_name)
+    if denied is not None:
+        entry["status"] = PendingActionStatus.DENIED.value
+        entry["reason"] = (
+            f"Your role no longer has the '{denied.value}' permission — nothing was run."
+        )
+        _store_actions(message, actions, action_index, entry)
+        await db.commit()
+        await log_event(
+            db,
+            request=request,
+            action="ai.action.denied",
+            summary=f"Blocked AI action {tool_name}: missing '{denied.value}'",
+            outcome=AuditOutcome.DENIED,
+            target_type="ai_conversation",
+            target_id=conversation.id,
+            target_label=conversation.title,
+            details={"tool": tool_name, "permission": denied.value},
+        )
+        return await _render_conversation(request, db, conversation, [str(entry["reason"])])
+
+    # No mutating tool exists yet (see `app.ai.tools`); a stored entry
+    # naming one is a tampered or stale proposal.
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown proposed action.")
+
+
+
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/discard",
+    dependencies=[Depends(verify_csrf)],
+)
+async def discard_action(
+    request: Request,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    action_index: int = Form(0),
+) -> Response:
+    """Mark a proposal discarded. Nothing runs, nothing is enqueued, and
+    there's no audit entry beyond the ones already written — declining to
+    do something isn't a mutation of the fleet."""
+    conversation = await _get_conversation(db, conversation_id, user)
+    message, actions, entry = await _get_pending_action(db, conversation, message_id, action_index)
+    if entry.get("status") == PendingActionStatus.PENDING.value:
+        entry["status"] = PendingActionStatus.DISCARDED.value
+        _store_actions(message, actions, action_index, entry)
+        await db.commit()
+    return RedirectResponse(
+        url=f"/ai/conversations/{conversation.id}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@router.post("/conversations/{conversation_id}/delete", dependencies=[Depends(verify_csrf)])
+async def delete_conversation(
+    request: Request,
+    conversation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    conversation = await _get_conversation(db, conversation_id, user)
+    title = conversation.title
+    # Messages are deleted explicitly rather than relying only on the FK's
+    # ON DELETE CASCADE: the cascade is real on Postgres, but SQLite (what
+    # the test suite runs on) doesn't enforce foreign keys unless the
+    # pragma is on, so leaning on it alone would leave orphans there and
+    # hide the difference.
+    await db.execute(delete(AiMessage).where(AiMessage.conversation_id == conversation.id))
+    await db.delete(conversation)
+    await db.commit()
+
+    await log_event(
+        db,
+        request=request,
+        action="ai.conversation.delete",
+        summary=f'Deleted the AI conversation "{title}"',
+        target_type="ai_conversation",
+        target_id=conversation_id,
+        target_label=title,
+    )
+    return RedirectResponse(url="/ai", status_code=status.HTTP_303_SEE_OTHER)

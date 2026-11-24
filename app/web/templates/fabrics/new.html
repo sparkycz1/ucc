@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}{{ t(request, "fabrics.add") }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "fabrics.add") }}</h1>
+
+  {% if errors %}
+    <div class="alert alert-error">
+      {% for error in errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  <form method="post" action="/fabrics" class="form" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% include "fabrics/_form_fields.html" %}
+    <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    <a class="button button-secondary" href="/fabrics">{{ t(request, "common.cancel") }}</a>
+  </form>
+{% endblock %}
