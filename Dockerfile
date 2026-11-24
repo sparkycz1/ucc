@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Stage 1: build the virtualenv with uv -----------------------------------
-FROM python:3.14.7-slim AS builder
+FROM python:3.14.9-slim AS builder
 
 # Official static uv binary — no need to pip-install it into the image.
 # Pinned to an exact version (same reasoning as Postgres/Redis/Caddy) —
@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 # --- Stage 2: minimal runtime image ------------------------------------------
-FROM python:3.14.7-slim AS runtime
+FROM python:3.14.9-slim AS runtime
 
 RUN groupadd --system app && useradd --system --gid app --home-dir /app --create-home app
 
