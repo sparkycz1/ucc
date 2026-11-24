@@ -82,7 +82,8 @@ def items(payload: Any) -> list[dict[str, Any]]:
 
 def _host_name(h: dict[str, Any]) -> str:
     rs = h.get("reportedState") or {}
-    return str(rs.get("name") or rs.get("hostname") or "")
+    # Stripped: Site Manager keeps whatever was typed, trailing spaces included.
+    return str(rs.get("name") or rs.get("hostname") or "").strip()
 
 
 def _print_pending(host: dict[str, Any], devices_payload: Any) -> set[str]:
