@@ -25,15 +25,26 @@ from sqlalchemy.orm import selectinload
 
 from app.audit import log_event
 from app.auth.dependencies import get_current_user, require_permission
+from app.core.app_settings import get_or_create_app_settings
 from app.core.csrf import get_or_create_csrf_token, set_csrf_cookie, verify_csrf
 from app.core.security import encrypt_secret
 from app.db.models.audit_log import AuditOutcome
 from app.db.models.console import Console
 from app.db.models.device import Device
 from app.db.models.fabric import Fabric
+from app.db.models.release import ReleaseKind
 from app.db.models.role import Permission
 from app.db.models.user import User
 from app.db.session import get_db
+from app.releases.verdicts import (
+    TargetVerdict,
+    installed_keys,
+    load_latest,
+    load_releases,
+    max_risk_for,
+    update_targets,
+    verdicts,
+)
 from app.schemas.fabric import FabricForm
 from app.services.access_scope import can_see_fabric_id, fabrics_visible_to
 from app.tasks.jobs import sync_fabric
@@ -72,6 +83,7 @@ def _form_from_request(raw: dict[str, str]) -> dict[str, object]:
         "description": raw.get("description", "").strip() or None,
         "api_key": raw.get("api_key", ""),
         "is_enabled": bool(raw.get("is_enabled")),
+        "max_acceptable_risk_level": (raw.get("max_acceptable_risk_level") or "").strip() or None,
     }
 
 
@@ -125,7 +137,12 @@ async def list_fabrics(
 
 @router.get("/new", dependencies=[_manage])
 async def new_fabric_form(request: Request) -> Response:
-    return _render_form(request, "fabrics/new.html", form={"is_enabled": True}, errors=[])
+    return _render_form(
+        request,
+        "fabrics/new.html",
+        form={"is_enabled": True, "max_acceptable_risk_level": None},
+        errors=[],
+    )
 
 
 @router.post("", dependencies=[_manage, Depends(verify_csrf)])
@@ -174,6 +191,7 @@ async def create_fabric(request: Request, db: AsyncSession = Depends(get_db)) ->
         description=payload.description,
         api_key_encrypted=encrypt_secret(payload.api_key),
         is_enabled=payload.is_enabled,
+        max_acceptable_risk_level=payload.max_acceptable_risk_level,
     )
     db.add(fabric)
     try:
@@ -209,6 +227,33 @@ async def create_fabric(request: Request, db: AsyncSession = Depends(get_db)) ->
     return RedirectResponse(url=f"/fabrics/{fabric.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
+async def _inventory_context(db: AsyncSession, fabric: Fabric) -> dict[str, object]:
+    """The inventory plus the GO/STOP verdict of every pending update in it,
+    keyed so the template can look one up per row: `("os", console_id)`,
+    `("app", console_id, app_name)`, `("device", device_id)`."""
+    consoles = await _load_inventory(db, fabric)
+    app_settings = await get_or_create_app_settings(db)
+    max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
+    latest = await load_latest(db, installed_keys(consoles))
+    targets = update_targets(consoles, latest)
+    by_key: dict[tuple[object, ...], TargetVerdict] = {}
+    for verdict in verdicts(targets, await load_releases(db, targets), max_level):
+        target = verdict.target
+        if target.device is not None:
+            by_key[("device", target.device.id)] = verdict
+        elif target.kind == ReleaseKind.OS:
+            by_key[("os", target.console.id)] = verdict
+        else:
+            by_key[("app", target.console.id, target.app_name)] = verdict
+    return {
+        "fabric": fabric,
+        "consoles": consoles,
+        "verdicts": by_key,
+        "max_risk_level": max_level,
+        "fabric_overrides_risk": fabric.max_acceptable_risk_level is not None,
+    }
+
+
 async def _load_inventory(db: AsyncSession, fabric: Fabric) -> list[Console]:
     result = await db.execute(
         select(Console)
@@ -238,8 +283,7 @@ async def show_fabric(
         request,
         "fabrics/detail.html",
         {
-            "fabric": fabric,
-            "consoles": await _load_inventory(db, fabric),
+            **await _inventory_context(db, fabric),
             "csrf_token": request.state.csrf_token,
             "sync_queued": request.query_params.get("sync") == "queued",
         },
@@ -259,7 +303,7 @@ async def fabric_inventory_panel(
     return templates.TemplateResponse(
         request,
         "fabrics/_inventory.html",
-        {"fabric": fabric, "consoles": await _load_inventory(db, fabric)},
+        await _inventory_context(db, fabric),
     )
 
 
@@ -303,6 +347,7 @@ async def edit_fabric_form(
             "name": fabric.name,
             "description": fabric.description,
             "is_enabled": fabric.is_enabled,
+            "max_acceptable_risk_level": fabric.max_acceptable_risk_level,
         },
         errors=[],
         fabric=fabric,
@@ -360,6 +405,7 @@ async def update_fabric(
     fabric.name = payload.name
     fabric.description = payload.description
     fabric.is_enabled = payload.is_enabled
+    fabric.max_acceptable_risk_level = payload.max_acceptable_risk_level
     try:
         await db.commit()
     except IntegrityError:
@@ -383,7 +429,11 @@ async def update_fabric(
         target_type="fabric",
         target_id=fabric.id,
         target_label=fabric.name,
-        details={"api_key_replaced": key_replaced, "is_enabled": fabric.is_enabled},
+        details={
+            "api_key_replaced": key_replaced,
+            "is_enabled": fabric.is_enabled,
+            "max_acceptable_risk_level": fabric.max_acceptable_risk_level,
+        },
     )
     if key_replaced and fabric.is_enabled:
         sync_fabric.delay(str(fabric.id))

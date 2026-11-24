@@ -1,0 +1,342 @@
+"""Releases — every UniFi release a synced console or device could update
+to, its AI risk rating and the GO/STOP recommendation, and the human
+decisions on top of it.
+
+- `fabric.view`: list and open releases (only the pending updates in
+  Fabrics the account may see are listed with one), and follow any
+  version's release-notes link.
+- `release.manage`: ask for a re-assessment, set or clear a manual risk
+  level (it replaces the AI's in every verdict).
+- `update.override`: allow a release whatever its risk level (every
+  pending update to it becomes GO), or withdraw that.
+
+Releases themselves are public UniFi information, global to the instance;
+what is scoped is which pending updates (consoles/devices) are shown.
+ucc only recommends — it never runs an update (Site Manager has no
+endpoint for it).
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.audit import log_event
+from app.auth.dependencies import get_current_user, require_permission
+from app.core.app_settings import get_or_create_app_settings
+from app.core.csrf import verify_csrf
+from app.db.models.console import Console
+from app.db.models.fabric import Fabric
+from app.db.models.release import MAX_RISK_LEVEL, MIN_RISK_LEVEL, Release, ReleaseKind
+from app.db.models.role import Permission
+from app.db.models.user import User
+from app.db.session import get_db
+from app.releases.evidence import SourceError
+from app.releases.products import community_search_url
+from app.releases.service import assessment_model, product_label
+from app.releases.sources.community import SITE_URL, CommunityClient
+from app.releases.verdicts import (
+    TargetVerdict,
+    installed_keys,
+    load_latest,
+    load_releases,
+    max_risk_for,
+    update_targets,
+    verdicts,
+)
+from app.releases.versions import normalize_version
+from app.services.access_scope import fabrics_visible_to
+from app.tasks.release_jobs import assess_release
+from app.web.templating import templates
+
+router = APIRouter(
+    prefix="/releases", dependencies=[Depends(require_permission(Permission.FABRIC_VIEW))]
+)
+_manage = Depends(require_permission(Permission.RELEASE_MANAGE))
+_override = Depends(require_permission(Permission.UPDATE_OVERRIDE))
+
+_VALID_KINDS = {kind.value for kind in ReleaseKind}
+
+
+async def _visible_verdicts(db: AsyncSession, user: User) -> list[tuple[Fabric, TargetVerdict]]:
+    """Every pending update in the Fabrics `user` may see, with its verdict."""
+    app_settings = await get_or_create_app_settings(db)
+    query = await fabrics_visible_to(db, user)
+    fabrics = list(
+        (
+            await db.execute(
+                query.options(
+                    selectinload(Fabric.consoles).selectinload(Console.apps),
+                    selectinload(Fabric.consoles).selectinload(Console.devices),
+                ).order_by(Fabric.name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[tuple[Fabric, TargetVerdict]] = []
+    for fabric in fabrics:
+        consoles = list(fabric.consoles)
+        latest = await load_latest(db, installed_keys(consoles))
+        targets = update_targets(consoles, latest)
+        releases = await load_releases(db, targets)
+        max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
+        out.extend((fabric, v) for v in verdicts(targets, releases, max_level))
+    return out
+
+
+@router.get("")
+async def list_releases(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    pending = await _visible_verdicts(db, user)
+    counts: dict[uuid.UUID, dict[str, int]] = {}
+    for _fabric, verdict in pending:
+        if verdict.release is None:
+            continue
+        bucket = counts.setdefault(verdict.release.id, {"targets": 0, "stop": 0})
+        bucket["targets"] += 1
+        if verdict.verdict == "stop":
+            bucket["stop"] += 1
+    show_all = request.query_params.get("all") == "1"
+    query = select(Release).order_by(Release.created_at.desc())
+    if not show_all:
+        query = query.where(Release.id.in_(list(counts)))
+    releases = list((await db.execute(query.limit(500))).scalars().all())
+    app_settings = await get_or_create_app_settings(db)
+    return templates.TemplateResponse(
+        request,
+        "releases/list.html",
+        {
+            "releases": releases,
+            "counts": counts,
+            "show_all": show_all,
+            "max_risk_level": app_settings.max_acceptable_risk_level,
+            "assessment_configured": await assessment_model(db, app_settings) is not None,
+            "unknown_count": sum(1 for _f, v in pending if v.target.target_version is None),
+        },
+    )
+
+
+def _is_community_url(url: str | None) -> bool:
+    return bool(url) and str(url).startswith(SITE_URL + "/")
+
+
+@router.get("/notes")
+async def release_notes(
+    db: AsyncSession = Depends(get_db),
+    kind: str = "",
+    product: str = "",
+    version: str = "",
+) -> Response:
+    """Redirect to the release notes of `kind`/`product`/`version` on
+    community.ui.com — a stored match if there is one, else a live search,
+    else community.ui.com's own release search. Only ever redirects to
+    community.ui.com."""
+    normalized = normalize_version(version)
+    if kind not in _VALID_KINDS or not product.strip() or normalized is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown release.")
+    product = product.strip()[:100]
+    stored = (
+        await db.execute(
+            select(Release).where(
+                Release.kind == kind, Release.product == product, Release.version == normalized
+            )
+        )
+    ).scalar_one_or_none()
+    target: str | None = stored.community_url if stored is not None else None
+    if not _is_community_url(target):
+        community = CommunityClient()
+        try:
+            post = await community.find_release(kind, product, normalized)
+        except SourceError:
+            post = None
+        finally:
+            await community.aclose()
+        target = post.url if post is not None else None
+        if post is not None and stored is not None:
+            stored.title = stored.title or post.title
+            stored.community_release_id = post.id
+            stored.community_url = post.url
+            stored.stage = stored.stage or post.stage
+            await db.commit()
+    if not _is_community_url(target):
+        target = community_search_url(kind, product, normalized)
+    return RedirectResponse(url=str(target), status_code=status.HTTP_302_FOUND)
+
+
+async def _get_release_or_404(db: AsyncSession, release_id: uuid.UUID) -> Release:
+    release = await db.get(Release, release_id)
+    if release is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Release not found.")
+    return release
+
+
+@router.get("/{release_id}")
+async def show_release(
+    request: Request,
+    release_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    release = await _get_release_or_404(db, release_id)
+    affected = [
+        (fabric, verdict)
+        for fabric, verdict in await _visible_verdicts(db, user)
+        if verdict.release is not None and verdict.release.id == release.id
+    ]
+    app_settings = await get_or_create_app_settings(db)
+    return templates.TemplateResponse(
+        request,
+        "releases/detail.html",
+        {
+            "release": release,
+            "label": product_label(release),
+            "affected": affected,
+            "csrf_token": request.state.csrf_token,
+            "assessment_configured": await assessment_model(db, app_settings) is not None,
+            "queued": request.query_params.get("queued") == "1",
+            "risk_levels": list(range(MIN_RISK_LEVEL, MAX_RISK_LEVEL + 1)),
+        },
+    )
+
+
+def _back(release: Release, **query: str) -> RedirectResponse:
+    suffix = "?" + "&".join(f"{k}={v}" for k, v in query.items()) if query else ""
+    return RedirectResponse(
+        url=f"/releases/{release.id}{suffix}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+def _label(release: Release) -> str:
+    return f"{product_label(release)} {release.version}"
+
+
+@router.post("/{release_id}/assess", dependencies=[_manage, Depends(verify_csrf)])
+async def request_assessment(
+    request: Request, release_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    release = await _get_release_or_404(db, release_id)
+    app_settings = await get_or_create_app_settings(db)
+    if await assessment_model(db, app_settings) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Release assessment is not configured (Settings → Releases).",
+        )
+    release.assessment_queued_at = datetime.now(UTC)
+    await db.commit()
+    assess_release.delay(str(release.id))
+    await log_event(
+        db,
+        request=request,
+        action="release.assess.request",
+        summary=f"Requested an AI assessment of {_label(release)}",
+        target_type="release",
+        target_id=release.id,
+        target_label=_label(release),
+    )
+    return _back(release, queued="1")
+
+
+@router.post("/{release_id}/risk", dependencies=[_manage, Depends(verify_csrf)])
+async def set_manual_risk(
+    request: Request,
+    release_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    risk_level: str = Form(""),
+    note: str = Form(""),
+) -> Response:
+    """Blank `risk_level` clears the manual level (back to the AI's)."""
+    release = await _get_release_or_404(db, release_id)
+    raw = risk_level.strip()
+    if raw:
+        if not raw.isdigit() or not MIN_RISK_LEVEL <= int(raw) <= MAX_RISK_LEVEL:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Risk level must be 1 to 5.",
+            )
+        release.manual_risk_level = int(raw)
+        release.manual_note = note.strip()[:2000] or None
+        release.manual_by = user.username
+        release.manual_at = datetime.now(UTC)
+        action, summary = (
+            "release.risk.set",
+            f"Set the risk level of {_label(release)} to {raw}/5 by hand",
+        )
+    else:
+        release.manual_risk_level = None
+        release.manual_note = None
+        release.manual_by = None
+        release.manual_at = None
+        action, summary = (
+            "release.risk.clear",
+            f"Cleared the manual risk level of {_label(release)}",
+        )
+    await db.commit()
+    await log_event(
+        db,
+        request=request,
+        action=action,
+        summary=summary,
+        target_type="release",
+        target_id=release.id,
+        target_label=_label(release),
+        details={"risk_level": release.manual_risk_level, "ai_risk_level": release.risk_level},
+    )
+    return _back(release)
+
+
+@router.post("/{release_id}/allow", dependencies=[_override, Depends(verify_csrf)])
+async def allow_release(
+    request: Request,
+    release_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    note: str = Form(""),
+) -> Response:
+    release = await _get_release_or_404(db, release_id)
+    release.allowed_by = user.username
+    release.allowed_at = datetime.now(UTC)
+    release.allowed_note = note.strip()[:2000] or None
+    await db.commit()
+    await log_event(
+        db,
+        request=request,
+        action="release.allow",
+        summary=f"Allowed {_label(release)} regardless of its risk level",
+        target_type="release",
+        target_id=release.id,
+        target_label=_label(release),
+        details={"risk_level": release.effective_risk_level, "note": release.allowed_note},
+    )
+    return _back(release)
+
+
+@router.post("/{release_id}/revoke", dependencies=[_override, Depends(verify_csrf)])
+async def revoke_allow(
+    request: Request, release_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    release = await _get_release_or_404(db, release_id)
+    release.allowed_by = None
+    release.allowed_at = None
+    release.allowed_note = None
+    await db.commit()
+    await log_event(
+        db,
+        request=request,
+        action="release.allow.revoke",
+        summary=f"Withdrew the manual allowance of {_label(release)}",
+        target_type="release",
+        target_id=release.id,
+        target_label=_label(release),
+    )
+    return _back(release)

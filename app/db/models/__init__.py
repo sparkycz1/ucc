@@ -19,6 +19,7 @@ from app.db.models.notification_rule import (
     NotificationRule,
     NotificationTemplate,
 )
+from app.db.models.release import LatestRelease, Release, ReleaseKind
 from app.db.models.role import Permission, Role, RolePermission
 from app.db.models.saved_audit_view import SavedAuditView
 from app.db.models.scheduled_task import ScheduledTask, ScheduleTargetType
@@ -57,6 +58,9 @@ __all__ = [
     "NotificationTemplate",
     "PendingActionStatus",
     "Permission",
+    "LatestRelease",
+    "Release",
+    "ReleaseKind",
     "Role",
     "RolePermission",
     "SavedAuditView",

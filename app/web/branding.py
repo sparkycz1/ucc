@@ -10,13 +10,11 @@ absolute (starts with `/` on Linux, the only OS this app ships an image
 for) and would otherwise collide with a bare-`/`-prefix heuristic.
 
 Unset (the default for both) keeps the built-in icon+wordmark: an inline
-`<svg>` in `partials/_brand.html` for the header/login page (so its
-equalizer-slider color can follow the site's own light/dark theme via
-`currentColor`, the same way every other icon in this app does — a static
-image file can't do that), and `static/img/favicon.svg` for the browser
-tab icon (browsers render favicons on their own chrome, not this app's
-theme, so a fixed dark color there is the right call, same as any other
-site's static favicon).
+`<svg>` in `partials/_brand.html` for the header/login page (inline so
+the wordmark next to it can follow the site's own light/dark theme), and
+`static/img/favicon.svg` for the browser tab icon — the same white-on-blue
+shield-and-arrow tile in both places, which reads the same on any
+background.
 """
 
 from __future__ import annotations

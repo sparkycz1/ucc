@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% from "partials/_release.html" import version_link, risk_badge, verdict_badge with context %}
+
+{% block title %}{{ label }} {{ release.version }} — ucc{% endblock %}
+
+{% block content %}
+  {% set current_user = request.state.user %}
+  <div class="page-header">
+    <h1>{{ label }} {{ version_link(release.kind, release.product, release.version) }}</h1>
+    <div class="page-header-actions">
+      {% if current_user.has_permission('release.manage') and assessment_configured %}
+        <form method="post" action="/releases/{{ release.id }}/assess" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button button-secondary">{{ t(request, "releases.reassess") }}</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <p class="hint">
+    {{ t(request, "releases.kind." ~ release.kind) }} · {{ release.product }}
+    {% if release.stage %} · {{ release.stage }}{% endif %}
+    {% if release.published_at %} · {{ t(request, "releases.published", when=(release.published_at | local_time('%Y-%m-%d'))) }}{% endif %}
+    {% if release.community_url %} · <a href="{{ release.community_url }}" target="_blank" rel="noopener noreferrer">{{ t(request, "releases.notes") }}</a>{% endif %}
+  </p>
+
+  {% if queued %}
+    <div class="alert alert-ok"><p>{{ t(request, "releases.queued") }}</p></div>
+  {% endif %}
+
+  <section class="panel">
+    <h2>{{ t(request, "releases.assessment") }} {{ risk_badge(release.effective_risk_level) }}</h2>
+    {% if release.manual_risk_level is not none %}
+      <p>{{ t(request, "releases.manual_by", level=release.manual_risk_level, user=release.manual_by, when=(release.manual_at | local_time('%Y-%m-%d %H:%M'))) }}
+         {% if release.risk_level is not none %}{{ t(request, "releases.ai_said", level=release.risk_level) }}{% endif %}</p>
+      {% if release.manual_note %}<p class="hint">{{ release.manual_note }}</p>{% endif %}
+    {% endif %}
+    {% if release.risk_level is not none %}
+      <p><strong>{{ t(request, "releases.risk." ~ release.risk_level) }}</strong></p>
+    {% endif %}
+    {% if release.summary %}<p>{{ release.summary }}</p>{% endif %}
+    {% if release.issues %}
+      <h3>{{ t(request, "releases.issues") }}</h3>
+      <ul>
+        {% for issue in release.issues %}
+          <li><strong>{{ issue.title }}</strong>{% if issue.detail %} — {{ issue.detail }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    {% if release.assessed_at %}
+      <p class="hint">{{ t(request, "releases.assessed_by", when=(release.assessed_at | local_time('%Y-%m-%d %H:%M %Z')), model=release.assessed_by_model or '—') }}</p>
+    {% elif not assessment_configured %}
+      <p class="hint">{{ t(request, "releases.not_configured") }}</p>
+    {% else %}
+      <p class="hint">{{ t(request, "releases.waiting") }}</p>
+    {% endif %}
+    {% if release.assessment_error %}
+      <div class="alert alert-warn"><p>{{ release.assessment_error }}</p></div>
+    {% endif %}
+    {% if release.sources %}
+      <h3>{{ t(request, "releases.sources") }}</h3>
+      <ul>
+        {% for source in release.sources %}
+          <li><span class="badge">{{ source.kind }}</span>
+            {% if source.url and (source.url.startswith('https://') or source.url.startswith('http://')) %}
+              <a href="{{ source.url }}" target="_blank" rel="noopener noreferrer nofollow">{{ source.title }}</a>
+            {% else %}{{ source.title }}{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  {% if current_user.has_permission('release.manage') %}
+  <section class="panel">
+    <h2>{{ t(request, "releases.manual_heading") }}</h2>
+    <form method="post" action="/releases/{{ release.id }}/risk" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="risk_level">{{ t(request, "releases.table.risk") }}</label>
+      <select id="risk_level" name="risk_level">
+        <option value="">{{ t(request, "releases.manual_none") }}</option>
+        {% for level in risk_levels %}
+          <option value="{{ level }}" {{ 'selected' if release.manual_risk_level == level else '' }}>{{ level }} — {{ t(request, "releases.risk." ~ level) }}</option>
+        {% endfor %}
+      </select>
+      <label for="risk_note">{{ t(request, "releases.note") }}</label>
+      <textarea id="risk_note" name="note" rows="2" maxlength="2000">{{ release.manual_note or '' }}</textarea>
+      <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    </form>
+  </section>
+  {% endif %}
+
+  {% if current_user.has_permission('update.override') %}
+  <section class="panel">
+    <h2>{{ t(request, "releases.allow_heading") }}</h2>
+    {% if release.is_allowed %}
+      <p>{{ t(request, "releases.allowed_by", user=release.allowed_by, when=(release.allowed_at | local_time('%Y-%m-%d %H:%M'))) }}</p>
+      {% if release.allowed_note %}<p class="hint">{{ release.allowed_note }}</p>{% endif %}
+      <form method="post" action="/releases/{{ release.id }}/revoke" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="button button-secondary">{{ t(request, "releases.revoke") }}</button>
+      </form>
+    {% else %}
+      <p class="hint">{{ t(request, "releases.allow_hint") }}</p>
+      <form method="post" action="/releases/{{ release.id }}/allow" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="allow_note">{{ t(request, "releases.note") }}</label>
+        <textarea id="allow_note" name="note" rows="2" maxlength="2000"></textarea>
+        <button type="submit" class="button">{{ t(request, "releases.allow") }}</button>
+      </form>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>{{ t(request, "releases.affected", count=(affected | length)) }}</h2>
+    {% if affected %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "nav.fabrics") }}</th>
+          <th>{{ t(request, "fabrics.table.device") }}</th>
+          <th>{{ t(request, "fabrics.table.version") }}</th>
+          <th>{{ t(request, "releases.table.verdict") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for fabric, verdict in affected %}
+          <tr>
+            <td><a href="/fabrics/{{ fabric.id }}">{{ fabric.name }}</a></td>
+            <td>{{ verdict.target.label }}</td>
+            <td>{{ verdict.target.current_version | normalize_version or '—' }}</td>
+            <td>{{ verdict_badge(verdict) }} <span class="hint">{{ t(request, "releases.max_level", level=verdict.max_risk_level) }}</span></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="hint">{{ t(request, "releases.affected_none") }}</p>
+    {% endif %}
+  </section>
+{% endblock %}

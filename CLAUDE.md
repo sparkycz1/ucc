@@ -7,9 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ucc (UniFi Control Center): a FastAPI + htmx web app for managing UniFi
 firmware/application updates across many consoles and sites. A **Fabric**
 is one UniFi Site Manager API key; ucc syncs its consoles (UniFi OS and app
-versions), sites and devices (firmware), and — next phase — gates updates
-on an AI assessment of each release (community.ui.com + Reddit, rated 1–5)
-against an acceptable level. Forked from debcontrol (SSH machine
+versions), sites and devices (firmware), and rates every release a pending
+update leads to with AI (community.ui.com + Reddit + web search, 1–5), which
+turns into a GO/STOP recommendation against an acceptable level
+(`app/releases/`). ucc never runs updates: Site Manager has no endpoint
+for it. Forked from debcontrol (SSH machine
 management): auth, RBAC, audit, AI providers, scheduling, notifications,
 i18n and the Docker setup are inherited; machines/SSH and the REST API are
 gone. **There is deliberately no REST API** — web UI only.
@@ -32,7 +34,7 @@ detailed, current, and actively maintained alongside the code:
   in its own page from there: **[Authentication &
   RBAC](https://github.com/sparkycz1/ucc/wiki/Authentication-RBAC)** (logins, sessions, permissions,
   Fabric scope), **[UniFi Integration](https://github.com/sparkycz1/ucc/wiki/UniFi-Integration)**
-  (Fabrics, inventory sync, connector proxy, the AI-gated update roadmap),
+  (Fabrics, inventory sync, connector proxy, release assessment and GO/STOP),
   **[Audit Log](https://github.com/sparkycz1/ucc/wiki/Audit-Log)**, and
   **[Notifications](https://github.com/sparkycz1/ucc/wiki/Notifications)** (rules, templates, every
   placeholder). Read the relevant page before changing something it

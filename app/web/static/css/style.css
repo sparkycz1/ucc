@@ -140,16 +140,13 @@ p { margin: 0 0 var(--space-3); }
    login/TOTP pages via partials/_brand.html) --- */
 .brand-icon {
   flex-shrink: 0;
-  /* The equalizer-slider glyph is drawn with `currentColor` (see
-     _brand.html) specifically so it follows the theme text color — the
-     ring itself is a fixed brand red, correct in both themes without
-     help. */
-  color: var(--color-text);
+  /* The tile is a fixed white-on-blue drawing (see _brand.html) that
+     reads the same in both themes, so it needs no theme color itself. */
 }
 .brand-icon-header { width: 1.6rem; height: 1.6rem; }
 .brand-icon-auth { width: 2.4rem; height: 2.4rem; }
-.brand-word-deb { color: #c8102e; }
-.brand-word-control { color: var(--color-text); }
+.brand-word-accent { color: var(--color-accent); }
+.brand-word-rest { color: var(--color-text); }
 .brand-logo-custom {
   display: block;
   object-fit: contain;
@@ -698,6 +695,12 @@ p { margin: 0 0 var(--space-3); }
 .badge-ok { background: rgba(70, 191, 138, 0.16); color: var(--color-ok); }
 .badge-warn { background: rgba(224, 171, 74, 0.16); color: var(--color-warn); }
 .badge-error { background: rgba(240, 104, 95, 0.16); color: var(--color-danger); }
+/* Release risk levels 1 (stable) … 5 (broken) — app.db.models.release. */
+.risk-1, .risk-2 { background: rgba(70, 191, 138, 0.16); color: var(--color-ok); }
+.risk-3 { background: rgba(224, 171, 74, 0.16); color: var(--color-warn); }
+.risk-4, .risk-5 { background: rgba(240, 104, 95, 0.16); color: var(--color-danger); }
+.risk-5 { font-weight: 700; }
+.update-target { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
 
 /* A machine tag (app.db.models.machine_tag) — neutral color since a tag
    carries no ok/warn/error meaning of its own, and a link (to that tag's

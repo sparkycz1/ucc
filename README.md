@@ -7,7 +7,7 @@
 <p align="center">
   <b>UniFi updates across every console and site — only once the community says the release is safe.</b><br>
   One place for every UniFi OS, application and device firmware version behind your<br>
-  Site Manager API keys, with AI-rated releases gating what gets updated.
+  Site Manager API keys, with every pending update rated by AI and marked GO or STOP.
 </p>
 
 <p align="center">
@@ -56,11 +56,11 @@
 
 | | |
 |---|---|
-| 🧵 **Fabrics** | Add a UniFi Site Manager API key and ucc mirrors every console behind it: UniFi OS, Network/Protect/… versions, sites, and every device's firmware — with the available update. Synced every 15 minutes, on demand, or on a cron schedule. |
-| 🧠 **AI-rated releases** *(next phase)* | Each new version is read up on community.ui.com and Reddit and rated 1 (stable) … 5 (broken), with the reasons and links to the posts. |
-| ⬆️ **Gated updates** *(next phase)* | Manual or cron-scheduled updates run only when the rating is within the level you accept — global, per Fabric, site or device type. Otherwise they stop, notify, and wait for someone allowed to override. |
+| 🧵 **Fabrics** | Add a UniFi Site Manager API key and ucc mirrors every console behind it: UniFi OS, Network/Protect/… versions, sites, and every device's firmware — with the version each can update to, even before the console offers it (the newest public release on community.ui.com). Every version links to its release notes. Synced every 15 minutes, on demand, or on a cron schedule. |
+| 🧠 **AI-rated releases** | Each pending version is read up on community.ui.com (release notes, comments, forum questions), Reddit and the web, and rated 1 (stable) … 5 (broken) by the AI provider you choose, with the problems found and links to the posts. Re-rated daily while a release is young. |
+| 🚦 **GO / STOP** | Every pending update is GO when its rating is within the level you accept (globally or per Fabric), STOP above it — with a notification. A person can set the level by hand or allow a release anyway, all audit-logged. ucc only recommends: Site Manager has no API to start an update. |
 | ⏱️ **Scheduling** | Cron any action against a site, a Fabric or every Fabric, with run history. |
-| 🔔 **Notifications** | Email or webhook on a failed sync, a finished assessment, a blocked, successful or failed update — per Fabric, per role. |
+| 🔔 **Notifications** | Email or webhook on a failed sync, a finished assessment, or an update turning STOP — per Fabric, per role. |
 | 🧠 **AI assistant** | Ask about your inventory in plain language. Read-only, scoped to the Fabrics you may see. |
 | 📝 **Audit log** | Every change, hash-chained, exportable, forwardable to your SIEM. |
 
@@ -125,10 +125,11 @@ Every variable is explained in
 
 ### 🔌 What can the connector proxy do?
 
-Site Manager API keys are documented as read-only; whether updates can be
-triggered through the cloud connector proxy is undocumented.
-[`scripts/probe_connector.py`](scripts/probe_connector.py) finds out
-against your own key — read-only unless you explicitly pass
+Site Manager API keys are read-only: there is no endpoint to start an
+update, and UniFi OS / Protect endpoints answer 403 through the cloud
+connector proxy. That is why ucc recommends instead of updating.
+[`scripts/probe_connector.py`](scripts/probe_connector.py) shows what your
+own key can reach — read-only unless you explicitly pass
 `--upgrade-device <mac> --yes-really-upgrade`:
 
 ```bash

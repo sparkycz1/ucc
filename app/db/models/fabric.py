@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, LargeBinary, String, Text, func
+from sqlalchemy import Boolean, Integer, LargeBinary, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -34,6 +34,10 @@ class Fabric(Base):
     # A disabled Fabric is skipped by the periodic sync and by every
     # scheduled task, but keeps its inventory and history.
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Overrides `AppSettings.max_acceptable_risk_level` for this Fabric's
+    # verdicts (`app.releases.verdicts`); NULL = use the global level.
+    max_acceptable_risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     last_sync_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # The last sync's error message, cleared on the next successful sync.

@@ -23,6 +23,11 @@ add another):
 - `app.tasks.jobs._sync_fabric` — FABRIC_SYNC_FAILED, only on the
   healthy-to-failing transition, never on every sweep that confirms the
   same failure.
+- `app.tasks.release_jobs._assess_release` — RELEASE_ASSESSED after every
+  assessment, and UPDATE_BLOCKED per Fabric with a pending update to that
+  release when its verdict turns STOP (not on every re-assessment that
+  confirms it). ucc never runs updates, so UPDATE_RUN_SUCCEEDED/FAILED have
+  no call site.
 """
 
 from __future__ import annotations

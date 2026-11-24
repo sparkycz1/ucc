@@ -29,6 +29,7 @@ from app.web.routes import (
     impersonation,
     live_ws,
     notifications,
+    releases,
     roles,
     scheduling,
     theme,
@@ -153,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(dashboard.router)
     app.include_router(fabrics.router)
+    app.include_router(releases.router)
     app.include_router(scheduling.router)
     app.include_router(audit.router)
     app.include_router(ai.router)

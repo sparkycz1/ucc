@@ -28,7 +28,7 @@
 
   <div id="fabric-inventory"
        hx-get="/fabrics/{{ fabric.id }}/inventory-panel"
-       hx-trigger="every 120s, live-inventory from:body"
+       hx-trigger="every 120s, live-inventory from:body, live-updates from:body"
        hx-swap="innerHTML">
     {% include "fabrics/_inventory.html" %}
   </div>

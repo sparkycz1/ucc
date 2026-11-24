@@ -31,6 +31,7 @@ from __future__ import annotations
 import app.scheduling.jobs  # noqa: F401
 import app.tasks.ai_jobs  # noqa: F401
 import app.tasks.jobs  # noqa: F401
+import app.tasks.release_jobs  # noqa: F401
 from app.tasks.celery_app import celery_app
 
 # Every task this app expects to fire on its own, on a schedule, with no
