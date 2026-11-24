@@ -37,6 +37,16 @@ class Console(Base):
     # UniFi OS firmware.
     os_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     os_update_available: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The console's own device firmware (`hardware.firmwareVersion`), as
+    # Site Manager's device list also reports it.
+    firmware_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # UniFi's own automatic updates, as the console reports them. These run
+    # on UniFi's side and bypass ucc's AI gate, so the UI warns about them;
+    # ucc can't change them (UniFi OS endpoints are 403 through the
+    # connector proxy). `None` = the console reports no schedule.
+    auto_update_schedule: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    auto_update_include_apps: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     last_seen_at: Mapped[datetime | None] = mapped_column(nullable=True)
 

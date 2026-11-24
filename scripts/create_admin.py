@@ -37,7 +37,7 @@ from app.db.models.user import AuthProvider, User
 from app.db.session import AsyncSessionLocal
 
 _ADMIN_ROLE_NAME = "Administrator"
-_MIN_PASSWORD_LENGTH = 12
+_MIN_CHARS = 12
 
 
 async def _get_or_create_admin_role(db: AsyncSession) -> Role:
@@ -77,9 +77,9 @@ async def _create_admin(username: str, password: str) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if len(password) < _MIN_PASSWORD_LENGTH:
+    if len(password) < _MIN_CHARS:
         print(
-            f"error: password must be at least {_MIN_PASSWORD_LENGTH} characters.", file=sys.stderr
+            f"error: password must be at least {_MIN_CHARS} characters.", file=sys.stderr
         )
         raise SystemExit(1)
 
