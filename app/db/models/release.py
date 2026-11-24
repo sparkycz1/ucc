@@ -67,6 +67,8 @@ class Release(Base):
 
     # --- The AI assessment (overwritten on every re-assessment) ---
     risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # A few words on why — "STP broken, cameras flicker" — for lists.
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     # [{"title": ..., "detail": ...}] — the concrete problems found.
     issues: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
@@ -104,6 +106,19 @@ class Release(Base):
         if self.manual_risk_level is not None:
             return self.manual_risk_level
         return self.risk_level
+
+    @property
+    def short_reason(self) -> str | None:
+        """`reason`, or — for ratings made before it existed — the titles
+        of the first issues."""
+        if self.reason:
+            return self.reason
+        titles = [
+            str(issue.get("title"))
+            for issue in (self.issues or [])[:3]
+            if isinstance(issue, dict) and issue.get("title")
+        ]
+        return ", ".join(titles) or None
 
     @property
     def is_allowed(self) -> bool:

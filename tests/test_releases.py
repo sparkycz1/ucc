@@ -344,6 +344,26 @@ def test_parse_answer_rejects_bad_answers(text: str) -> None:
         parse_answer(text)
 
 
+def test_parse_answer_reads_and_trims_the_reason() -> None:
+    long_reason = "STP broken, " * 40
+    result = parse_answer(json.dumps({"risk_level": 4, "reason": long_reason, "summary": "s"}))
+    assert result.reason.startswith("STP broken, STP broken")
+    assert len(result.reason) <= assess_module.MAX_REASON
+    assert parse_answer('{"risk_level": 1, "summary": "s"}').reason == ""
+
+
+def test_system_prompt_names_the_instance_language() -> None:
+    assert "in Czech" in assess_module.system_prompt("cs")
+    assert "in English" in assess_module.system_prompt("xx")
+
+
+def test_short_reason_falls_back_to_issue_titles() -> None:
+    assert _release(reason="STP broken").short_reason == "STP broken"
+    old = _release(issues=[{"title": "VLAN drops"}, {"title": "Adoption loop"}, "junk"])
+    assert old.short_reason == "VLAN drops, Adoption loop"
+    assert _release().short_reason is None
+
+
 def test_parse_answer_caps_the_issue_list() -> None:
     answer = {"risk_level": 2, "summary": "s", "issues": [{"title": f"i{n}"} for n in range(20)]}
     result = parse_answer(json.dumps(answer))
@@ -586,7 +606,8 @@ async def test_assess_stores_the_rating_records_usage_and_notifies_stop(
         return evidence
 
     fake = _FakeClient(
-        '{"risk_level": 4, "summary": "Cameras drop.", "issues": [{"title": "Drops"}]}'
+        '{"risk_level": 4, "reason": "cameras flicker", "summary": "Cameras drop.",'
+        ' "issues": [{"title": "Drops"}]}'
     )
     notified: list[tuple[str, str | None]] = []
 
@@ -608,6 +629,7 @@ async def test_assess_stores_the_rating_records_usage_and_notifies_stop(
         stored = await db.get(Release, release.id)
         assert stored is not None
         assert stored.risk_level == 4 and stored.summary == "Cameras drop."
+        assert stored.reason == "cameras flicker"
         assert stored.community_url == "https://community.ui.com/releases/p/r9"
         assert stored.title == "UniFi Protect Application"
         assert stored.assessed_by_model == "anthropic/fake-model"
@@ -700,10 +722,15 @@ async def test_release_pages_and_permissions(
     from tests.conftest import create_fabric_via_web
 
     fabric_id = await create_fabric_via_web(client, "Office")
-    release_id = await _web_release(db_session_factory, fabric_id, risk_level=4)
+    release_id = await _web_release(
+        db_session_factory, fabric_id, risk_level=4, reason="STP broken, cameras flicker"
+    )
 
     listing = await client.get("/releases")
     assert listing.status_code == 200
+    assert "STP broken, cameras flicker" in listing.text
+    # Current → new.
+    assert "version=7.3.70" in listing.text and "→" in listing.text
     assert f"/releases/{release_id}" in listing.text
     detail = await client.get(f"/releases/{release_id}")
     assert detail.status_code == 200 and "HQ" in detail.text

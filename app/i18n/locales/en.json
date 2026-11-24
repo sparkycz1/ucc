@@ -653,6 +653,8 @@
     "settings.releases.web_key": "Brave Search API key",
     "settings.releases.web_clear_key": "Remove the stored API key",
     "settings.releases.web_hint": "Finds reports outside community.ui.com and Reddit. SearXNG needs its JSON output enabled (search.formats: [html, json]).",
-    "releases.details": "details"
+    "releases.details": "details",
+    "releases.table.from_to": "Current → new",
+    "releases.table.why": "Why"
   }
 }
