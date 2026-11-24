@@ -1,11 +1,15 @@
 """Settings — the inventory sync interval and the notification-log
-retention (Checks & retention), the audit log's own hash-chain verification (Security), and
+retention (Checks & retention), release assessment (Releases: acceptable
+risk level, the AI model, Reddit and web search sources), the audit log's
+own hash-chain verification (Security), and
 the LDAP/OIDC/syslog/SMTP login and integration configuration
 (Integrations) — see `app/db/models/app_settings.py` for why all of this
 is Settings-page config rather than environment variables.
 """
 
 from __future__ import annotations
+
+import uuid
 
 from fastapi import APIRouter, Depends, Form, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -35,10 +39,12 @@ from app.db.models.app_settings import (
     DEFAULT_SYSLOG_PORT,
     SmtpEncryption,
     SyslogProtocol,
+    WebSearchKind,
 )
 from app.db.models.audit_log import AuditOutcome
 from app.db.models.role import Permission
 from app.db.session import get_db
+from app.releases.sources.web import validate_searxng_url
 from app.web.templating import t, templates
 
 router = APIRouter(
@@ -54,7 +60,7 @@ _manage = Depends(require_permission(Permission.SETTINGS_MANAGE))
 # string param is simpler and gets the same result — every handler below
 # just needs to know which tab *it itself* belongs to, to redirect back to
 # `/settings?tab=<that tab>` instead of losing your place on every save.
-_TAB_KEYS = ["checks", "security", "integrations", "ai"]
+_TAB_KEYS = ["checks", "releases", "security", "integrations", "ai"]
 _VALID_TABS = set(_TAB_KEYS)
 _DEFAULT_TAB = "checks"
 
@@ -99,6 +105,7 @@ async def _render_settings(
         "ai_configs": [ai_configs[kind] for kind in AiProviderKind if kind in ai_configs],
         "openai_compatible_kind": AiProviderKind.OPENAI_COMPATIBLE.value,
         "selectable_models": await get_selectable_models(db),
+        "web_search_kinds": list(WebSearchKind),
         "tabs": _tabs(request),
         "active_tab": tab,
         **extra,
@@ -487,6 +494,120 @@ async def update_smtp_settings(
         ),
     )
     return RedirectResponse(url="/settings?tab=integrations", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Release assessment (app/releases/) ---------------------------------------
+#
+# The acceptable risk level, which model rates releases, and the optional
+# Reddit / web search sources. Same write-only-secret convention as above:
+# a blank secret field keeps the stored value; the explicit "clear"
+# checkbox removes it.
+
+
+@router.post("/releases", dependencies=[_manage, Depends(verify_csrf)])
+async def update_release_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    max_acceptable_risk_level: str = Form(""),
+    release_assessment_model_id: str = Form(""),
+    reddit_client_id: str = Form(""),
+    reddit_client_secret: str = Form(""),
+    reddit_clear: str = Form(""),
+    web_search_kind: str = Form(WebSearchKind.NONE.value),
+    web_search_url: str = Form(""),
+    web_search_api_key: str = Form(""),
+    web_search_clear_key: str = Form(""),
+) -> Response:
+    app_settings = await get_or_create_app_settings(db)
+    errors: list[str] = []
+
+    level, error = _parse_bounded_int(
+        max_acceptable_risk_level, label="Acceptable risk level", minimum=1, maximum=5
+    )
+    if error or level is None:
+        errors.append(error or "Acceptable risk level must be 1 to 5.")
+
+    model_id: uuid.UUID | None = None
+    model_label = "off"
+    if release_assessment_model_id.strip():
+        selectable = {
+            str(model.id): (config, model) for config, model in await get_selectable_models(db)
+        }
+        chosen = selectable.get(release_assessment_model_id.strip())
+        if chosen is None:
+            errors.append("Choose one of the enabled AI models.")
+        else:
+            model_id = chosen[1].id
+            model_label = f"{chosen[0].kind.value}/{chosen[1].model_id}"
+
+    try:
+        kind = WebSearchKind(web_search_kind)
+    except ValueError:
+        errors.append("Unknown web search provider.")
+        kind = WebSearchKind.NONE
+    url = web_search_url.strip()
+    if kind is WebSearchKind.SEARXNG:
+        if not url:
+            errors.append("SearXNG needs its URL.")
+        else:
+            url_error = validate_searxng_url(url)
+            if url_error:
+                errors.append(url_error)
+    if (
+        kind is WebSearchKind.BRAVE
+        and not web_search_api_key.strip()
+        and (web_search_clear_key or not app_settings.web_search_api_key_encrypted)
+    ):
+        errors.append("Brave Search needs an API key.")
+    client_id = reddit_client_id.strip()
+    if not reddit_clear and client_id and not (
+        reddit_client_secret.strip() or app_settings.reddit_client_secret_encrypted
+    ):
+        errors.append("Reddit needs both the app's client id and its secret.")
+
+    if errors:
+        return await _render_settings(request, db, errors, tab="releases")
+
+    assert level is not None
+    app_settings.max_acceptable_risk_level = level
+    app_settings.release_assessment_model_id = model_id
+    if reddit_clear:
+        app_settings.reddit_client_id = None
+        app_settings.reddit_client_secret_encrypted = None
+    else:
+        app_settings.reddit_client_id = client_id or None
+        if reddit_client_secret.strip():
+            app_settings.reddit_client_secret_encrypted = encrypt_secret(
+                reddit_client_secret.strip()
+            )
+        if not client_id:
+            app_settings.reddit_client_secret_encrypted = None
+    app_settings.web_search_kind = kind.value
+    app_settings.web_search_url = url or None
+    if web_search_clear_key:
+        app_settings.web_search_api_key_encrypted = None
+    elif web_search_api_key.strip():
+        app_settings.web_search_api_key_encrypted = encrypt_secret(web_search_api_key.strip())
+    await db.commit()
+
+    reddit_on = bool(app_settings.reddit_client_id and app_settings.reddit_client_secret_encrypted)
+    await log_event(
+        db,
+        request=request,
+        action="settings.releases.update",
+        summary=(
+            f"Updated release assessment settings (acceptable level {level}/5, "
+            f"model {model_label}, Reddit {'on' if reddit_on else 'off'}, "
+            f"web search {kind.value})"
+        ),
+        details={
+            "max_acceptable_risk_level": level,
+            "model": model_label,
+            "reddit": reddit_on,
+            "web_search": kind.value,
+        },
+    )
+    return RedirectResponse(url="/settings?tab=releases", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # --- AI assistant (app/ai/) --------------------------------------------------

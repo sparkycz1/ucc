@@ -11,6 +11,8 @@ class FabricForm(BaseModel):
     # Required on create; on edit, blank means "keep the stored key".
     api_key: str | None = Field(default=None, max_length=512)
     is_enabled: bool = True
+    # NULL = use the global acceptable level (Settings → Releases).
+    max_acceptable_risk_level: int | None = Field(default=None, ge=1, le=5)
 
     @field_validator("name")
     @classmethod

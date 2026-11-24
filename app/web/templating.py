@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.core.version import APP_VERSION, get_git_commit
 from app.i18n import get_locale
 from app.i18n import translate as _translate
+from app.releases.versions import normalize_version
 from app.web.branding import favicon_href, logo_src
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -54,6 +55,8 @@ def local_time(value: datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
 
 
 templates.env.filters["local_time"] = local_time
+# `UVC.SAV539g.v5.5.45.67.0dda191...` → `5.5.45` (app.releases.versions).
+templates.env.filters["normalize_version"] = normalize_version
 
 
 def tojson_filter(value: object) -> Markup:

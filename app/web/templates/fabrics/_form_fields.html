@@ -16,3 +16,12 @@
       {{ t(request, "fabrics.form.enabled") }}
     </label>
     <p class="hint">{{ t(request, "fabrics.form.enabled_hint") }}</p>
+
+    <label for="max_acceptable_risk_level">{{ t(request, "fabrics.form.max_risk") }}</label>
+    <select id="max_acceptable_risk_level" name="max_acceptable_risk_level">
+      <option value="" {{ 'selected' if form.max_acceptable_risk_level is none else '' }}>{{ t(request, "fabrics.form.max_risk_global") }}</option>
+      {% for level in range(1, 6) %}
+        <option value="{{ level }}" {{ 'selected' if form.max_acceptable_risk_level == level else '' }}>{{ level }} — {{ t(request, "releases.risk." ~ level) }}</option>
+      {% endfor %}
+    </select>
+    <p class="hint">{{ t(request, "fabrics.form.max_risk_hint") }}</p>

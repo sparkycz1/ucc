@@ -161,7 +161,12 @@ celery_app = Celery(
     # imports back into them, so importing them here at module-definition
     # time is a circular import. Celery imports these itself, once, when a
     # worker or beat process boots — after this module is fully loaded.
-    include=["app.tasks.jobs", "app.tasks.ai_jobs", "app.scheduling.jobs"],
+    include=[
+        "app.tasks.jobs",
+        "app.tasks.ai_jobs",
+        "app.tasks.release_jobs",
+        "app.scheduling.jobs",
+    ],
 )
 
 celery_app.conf.update(
@@ -235,6 +240,12 @@ celery_app.conf.beat_schedule = {
     "purge-old-audit-log-entries": {
         "task": "app.tasks.jobs.purge_old_audit_log_entries",
         "schedule": crontab(hour=3, minute=0),
+    },
+    # Early release ratings rest on little feedback; re-rate young releases
+    # that still have pending updates once a day (app.tasks.release_jobs).
+    "reassess-releases": {
+        "task": "app.tasks.release_jobs.reassess_releases",
+        "schedule": crontab(hour=5, minute=10),
     },
     "purge-old-notification-logs": {
         "task": "app.tasks.jobs.purge_old_notification_logs",

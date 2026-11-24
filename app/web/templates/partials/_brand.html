@@ -5,30 +5,24 @@
    identical either way.
 
    Renders `<img>` from CUSTOM_LOGO (app.web.branding.logo_src) when a
-   deployer has configured one, else the built-in inline SVG icon +
-   two-tone wordmark. Inline, not a static file, specifically so the
-   equalizer-slider glyph can use `currentColor` and follow the site's
-   own light/dark theme (`--color-text`) — a static image file baked to
-   one fixed color can't do that; see app.web.branding's own docstring. #}
+   deployer has configured one, else the built-in ucc icon (a shield
+   with an upward arrow — "updates, but only safe ones" — on a blue tile,
+   the same drawing as static/img/favicon.svg) + two-tone wordmark. The
+   tile is self-contained white-on-blue, so it reads the same in both
+   themes; the wordmark's second half follows `--color-text`. #}
 {% macro render(size='header') %}
   {% set custom = logo_src() %}
   {% if custom %}
     <img src="{{ custom }}" alt="ucc" class="brand-logo-custom brand-logo-{{ size }}">
   {% else %}
     <svg class="brand-icon brand-icon-{{ size }}" viewBox="0 0 200 200" role="img" aria-label="ucc" xmlns="http://www.w3.org/2000/svg">
-      <path d="M138 46 A62 62 0 1 1 96 168" fill="none" stroke="#c8102e" stroke-width="16" stroke-linecap="round"/>
-      <path d="M96 168 Q88 172 84 164" fill="none" stroke="#c8102e" stroke-width="8" stroke-linecap="round"/>
-      <g stroke="currentColor" stroke-width="8" stroke-linecap="round">
-        <line x1="72" y1="80" x2="72" y2="130"/>
-        <line x1="100" y1="60" x2="100" y2="140"/>
-        <line x1="128" y1="85" x2="128" y2="130"/>
-      </g>
-      <g fill="currentColor">
-        <circle cx="72" cy="100" r="10"/>
-        <circle cx="100" cy="88" r="10"/>
-        <circle cx="128" cy="108" r="10"/>
+      <rect x="10" y="10" width="180" height="180" rx="44" fill="#006fff"/>
+      <path d="M100 38 L152 58 V100 C152 134 130 156 100 166 C70 156 48 134 48 100 V58 Z" fill="none" stroke="#ffffff" stroke-width="11" stroke-linejoin="round"/>
+      <g fill="none" stroke="#ffffff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="100" y1="134" x2="100" y2="80"/>
+        <polyline points="78,100 100,78 122,100"/>
       </g>
     </svg>
-    <span class="brand-word"><span class="brand-word-deb">deb</span><span class="brand-word-control">control</span></span>
+    <span class="brand-word"><span class="brand-word-accent">u</span><span class="brand-word-rest">cc</span></span>
   {% endif %}
 {% endmacro %}

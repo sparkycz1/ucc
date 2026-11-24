@@ -23,9 +23,10 @@ deploy-time infrastructure. Secrets in here (`ldap_bind_password_encrypted`,
 from __future__ import annotations
 
 import enum
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Integer, LargeBinary, String, func
+from sqlalchemy import Boolean, ForeignKey, Integer, LargeBinary, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -69,6 +70,20 @@ class SmtpEncryption(enum.StrEnum):
 
 
 DEFAULT_SMTP_PORT = 587
+
+# Risk levels 1 (stable) .. 5 (broken); see `app.db.models.release`. 2 =
+# "minor, isolated reports only" is acceptable out of the box.
+DEFAULT_MAX_ACCEPTABLE_RISK_LEVEL = 2
+
+
+class WebSearchKind(enum.StrEnum):
+    """The general web search used next to community.ui.com and Reddit when
+    assessing a release (`app.releases.sources.web`). Stored as a plain
+    string; `NONE` turns that source off."""
+
+    NONE = "none"
+    SEARXNG = "searxng"
+    BRAVE = "brave"
 
 
 class AppSettings(Base):
@@ -199,6 +214,37 @@ class AppSettings(Base):
     # reusing `smtp_username`.
     smtp_from_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     smtp_from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- Release assessment (app.releases) ---
+    # A pending update whose release's risk level is above this is STOP;
+    # `Fabric.max_acceptable_risk_level` overrides it per Fabric.
+    max_acceptable_risk_level: Mapped[int] = mapped_column(
+        Integer,
+        default=DEFAULT_MAX_ACCEPTABLE_RISK_LEVEL,
+        server_default=str(DEFAULT_MAX_ACCEPTABLE_RISK_LEVEL),
+        nullable=False,
+    )
+    # Which enabled model rates releases. NULL = assessment is off (releases
+    # are still discovered and listed, just never rated).
+    release_assessment_model_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_models.id", ondelete="SET NULL"), nullable=True
+    )
+    # Reddit only answers API calls with an app's OAuth credentials
+    # ("script"/installed app at reddit.com/prefs/apps); both empty = Reddit
+    # is skipped as a source.
+    reddit_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reddit_client_secret_encrypted: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
+    web_search_kind: Mapped[str] = mapped_column(
+        String(16), default=WebSearchKind.NONE.value, server_default="none", nullable=False
+    )
+    # SearXNG base URL (its JSON API must be enabled).
+    web_search_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Brave Search API key.
+    web_search_api_key_encrypted: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
 
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False

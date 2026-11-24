@@ -108,6 +108,11 @@ jobs:
           - cron
           - schedule_target
           - fabric_form
+          - community_release
+          - reddit_listing
+          - web_search
+          - ai_answer
+          - release_text
     steps:
       # Pinned by commit SHA like every other action here (see ci.yml).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

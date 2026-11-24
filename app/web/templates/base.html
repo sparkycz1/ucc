@@ -24,6 +24,7 @@
       <a href="/dashboard" {% if current_path == '/dashboard' %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.dashboard") }}</a>
       {% if current_user.has_permission('fabric.view') %}
         <a href="/fabrics" {% if current_path.startswith('/fabrics') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.fabrics") }}</a>
+        <a href="/releases" {% if current_path.startswith('/releases') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.releases") }}</a>
       {% endif %}
       {% if current_user.has_permission('scheduling.view') %}
         <a href="/scheduling" {% if current_path.startswith('/scheduling') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.scheduling") }}</a>

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% from "partials/_release.html" import version_link, risk_badge with context %}
+
+{% block title %}{{ t(request, "nav.releases") }} — ucc{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>{{ t(request, "nav.releases") }}</h1>
+    <div class="page-header-actions">
+      {% if show_all %}
+        <a class="button button-secondary" href="/releases">{{ t(request, "releases.show_pending") }}</a>
+      {% else %}
+        <a class="button button-secondary" href="/releases?all=1">{{ t(request, "releases.show_all") }}</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <p class="hint">{{ t(request, "releases.intro", level=max_risk_level) }}</p>
+
+  {% if not assessment_configured %}
+    <div class="alert alert-warn"><p>{{ t(request, "releases.not_configured") }}</p></div>
+  {% endif %}
+  {% if unknown_count %}
+    <p class="hint">{{ t(request, "releases.unknown_targets", count=unknown_count) }}</p>
+  {% endif %}
+
+  {% if releases %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>{{ t(request, "releases.table.release") }}</th>
+        <th>{{ t(request, "fabrics.table.version") }}</th>
+        <th>{{ t(request, "releases.table.stage") }}</th>
+        <th>{{ t(request, "releases.table.risk") }}</th>
+        <th>{{ t(request, "releases.table.pending") }}</th>
+        <th>{{ t(request, "releases.table.assessed") }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for release in releases %}
+        {% set count = counts.get(release.id) %}
+        <tr>
+          <td>
+            <a href="/releases/{{ release.id }}">{{ release.title or t(request, "releases.kind." ~ release.kind) }}</a>
+            <span class="hint">{{ release.product }}</span>
+          </td>
+          <td>{{ version_link(release.kind, release.product, release.version) }}</td>
+          <td>{{ release.stage or '—' }}</td>
+          <td>
+            {{ risk_badge(release.effective_risk_level) }}
+            {% if release.manual_risk_level is not none %}<span class="badge" title="{{ t(request, 'releases.manual_hint') }}">{{ t(request, "releases.manual") }}</span>{% endif %}
+            {% if release.is_allowed %}<span class="badge badge-ok">{{ t(request, "releases.allowed") }}</span>{% endif %}
+          </td>
+          <td>
+            {% if count %}
+              {{ count.targets }}
+              {% if count.stop %}<span class="badge badge-error">{{ t(request, "releases.stop_count", count=count.stop) }}</span>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if release.assessed_at %}{{ release.assessed_at | local_time('%Y-%m-%d %H:%M') }}
+            {% elif release.assessment_error %}<span class="badge badge-error" title="{{ release.assessment_error }}">{{ t(request, "releases.failed") }}</span>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <section class="panel"><p class="hint">{{ t(request, "releases.none") }}</p></section>
+  {% endif %}
+{% endblock %}

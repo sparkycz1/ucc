@@ -1,0 +1,56 @@
+{# Release helpers shared by the Fabric inventory and the Releases pages.
+
+   `version_link` links any version to its release notes: /releases/notes
+   finds the community.ui.com post for it (or falls back to that site's
+   own release search) and redirects there, in a new tab. #}
+{% macro version_link(kind, product, version, raw=none) -%}
+  {%- if version and product -%}
+    <a href="/releases/notes?{{ {'kind': kind, 'product': product, 'version': version} | urlencode }}"
+       target="_blank" rel="noopener noreferrer"
+       title="{{ t(request, 'releases.notes_link_hint') }}">{{ raw or version }}</a>
+  {%- else -%}
+    {{ raw or version or '—' }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro risk_badge(level) -%}
+  {%- if level is none -%}
+    <span class="badge">{{ t(request, "releases.not_rated") }}</span>
+  {%- else -%}
+    <span class="badge risk-{{ level }}" title="{{ t(request, 'releases.risk.' ~ level) }}">{{ t(request, "releases.risk_short", level=level) }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro verdict_badge(verdict) -%}
+  {%- if verdict.verdict == 'go' -%}
+    <span class="badge badge-ok" title="{{ t(request, 'releases.verdict.go_hint', max=verdict.max_risk_level) }}">{{ t(request, "releases.verdict.go") }}</span>
+  {%- elif verdict.verdict == 'stop' -%}
+    <span class="badge badge-error" title="{{ t(request, 'releases.verdict.stop_hint', max=verdict.max_risk_level) }}">{{ t(request, "releases.verdict.stop") }}</span>
+  {%- elif verdict.verdict == 'pending' -%}
+    <span class="badge" title="{{ t(request, 'releases.verdict.pending_hint') }}">{{ t(request, "releases.verdict.pending") }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# The "Update to" cell: the target version (linked to its notes), where
+   it came from, and the verdict with the release's risk level. #}
+{% macro update_cell(verdict) -%}
+  {%- if verdict is none -%}
+    —
+  {%- elif verdict.target.target_version is none -%}
+    <span class="badge badge-warn" title="{{ t(request, 'fabrics.update_version_unknown_hint') }}">{{ t(request, "fabrics.update_version_unknown") }}</span>
+  {%- else -%}
+    {% set target = verdict.target %}
+    <span class="update-target">
+      {{ version_link(target.kind, target.product, target.target_version) }}
+      {%- if target.source == 'community' %}
+        <span class="badge" title="{{ t(request, 'fabrics.community_latest_hint') }}">{{ t(request, "fabrics.community_latest") }}</span>
+      {%- endif %}
+      {{ verdict_badge(verdict) }}
+      {%- if verdict.release is not none and verdict.release.effective_risk_level is not none %}
+        <a href="/releases/{{ verdict.release.id }}">{{ risk_badge(verdict.release.effective_risk_level) }}</a>
+      {%- elif verdict.release is not none %}
+        <a href="/releases/{{ verdict.release.id }}" class="hint">{{ t(request, "releases.details") }}</a>
+      {%- endif %}
+    </span>
+  {%- endif -%}
+{%- endmacro %}

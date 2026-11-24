@@ -8,7 +8,10 @@ guard the way untrusted input would reach it, then checks the contract:
   anything else;
 - whatever a security guard lets through really has the property it
   promises (`safe_local_path` returns a same-site path, `normalize_email`
-  returns something email-shaped).
+  returns something email-shaped);
+- the release-assessment readers (`app.releases`: community.ui.com,
+  Reddit, web search, the AI model's answer) never raise on a hostile
+  reply and only ever produce links of the kind they promise.
 
 Plain Python on purpose: `fuzz.run` drives these under Atheris, and
 `tests/test_fuzz_targets.py` runs them on every OS over a seed corpus.
@@ -24,6 +27,12 @@ import yaml
 from pydantic import ValidationError
 
 from app.core import yaml_safety
+from app.releases import assess as release_assess
+from app.releases.evidence import Evidence
+from app.releases.products import is_newer, title_matches
+from app.releases.sources import community, reddit, web
+from app.releases.text import html_to_text
+from app.releases.versions import normalize_version
 from app.scheduling.cron import validate_cron_expression
 from app.scheduling.targets import decode_target
 from app.schemas.fabric import FabricForm
@@ -126,6 +135,68 @@ def fabric_form(data: bytes) -> None:
         return
 
 
+def community_release(data: bytes) -> None:
+    """A community.ui.com GraphQL reply: the release search, the release
+    post with its comments, and the forum question search."""
+    payload = _json(data)
+    body = payload if isinstance(payload, dict) else {"x": payload}
+    raw_items = body.get("items")
+    items: list[Any] = raw_items if isinstance(raw_items, list) else [payload]
+    for kind, product in (("app", "network"), ("os", "UDM-Pro"), ("firmware", "G5 Flex")):
+        post = community.pick_release(kind, product, "11.0.104", items)
+        if post is not None:
+            assert post.url.startswith(community.SITE_URL + "/releases/")
+        latest = community.pick_latest(kind, product, items)
+        assert latest is None or (latest.stage or "GA") == "GA"
+    evidence = Evidence()
+    community.parse_release(evidence, body, "id")
+    community.parse_questions(evidence, body, "11.0.104")
+    for item in evidence.items:
+        assert item.url is None or item.url.startswith(community.SITE_URL + "/")
+
+
+def reddit_listing(data: bytes) -> None:
+    """A Reddit search or comments listing: only reddit.com links come out."""
+    payload = _json(data)
+    for post in reddit.parse_posts(payload):
+        assert post["url"].startswith(reddit.SITE_URL + "/r/")
+    for body, score in reddit.parse_comments(payload):
+        assert isinstance(body, str) and body
+        assert score is None or isinstance(score, int)
+
+
+def web_search(data: bytes) -> None:
+    """A SearXNG / Brave reply: only http(s) links outside the sources
+    that have their own reader come out."""
+    payload = _json(data)
+    for kind in ("searxng", "brave"):
+        for _title, url, _snippet in web.parse_results(kind, payload):
+            assert url.startswith(("http://", "https://"))
+            assert "community.ui.com" not in url.split("/")[2]
+
+
+def ai_answer(data: bytes) -> None:
+    """The model's answer: a valid rating 1–5, or `AssessmentError`."""
+    try:
+        result = release_assess.parse_answer(_text(data))
+    except release_assess.AssessmentError:
+        return
+    assert 1 <= result.risk_level <= 5
+    assert len(result.issues) <= release_assess.MAX_ISSUES
+
+
+def release_text(data: bytes) -> None:
+    """Version strings, release titles and HTML from any source."""
+    text = _text(data)
+    version = normalize_version(text)
+    if version is not None:
+        parts = version.split(".")
+        assert 2 <= len(parts) <= 3 and all(p.isdigit() for p in parts)
+        assert not is_newer(version, version)
+    title_matches("firmware", text[:40], text)
+    assert isinstance(html_to_text(text), str)
+
+
 TARGETS: dict[str, Callable[[bytes], None]] = {
     "site_manager_hosts": site_manager_hosts,
     "site_manager_sites": site_manager_sites,
@@ -136,4 +207,9 @@ TARGETS: dict[str, Callable[[bytes], None]] = {
     "cron": cron,
     "schedule_target": schedule_target,
     "fabric_form": fabric_form,
+    "community_release": community_release,
+    "reddit_listing": reddit_listing,
+    "web_search": web_search,
+    "ai_answer": ai_answer,
+    "release_text": release_text,
 }

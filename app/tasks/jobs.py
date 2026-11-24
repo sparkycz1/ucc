@@ -37,7 +37,9 @@ from app.db import session as db_session
 from app.db.models.audit_log import AuditLogEntry, AuditOutcome
 from app.db.models.fabric import Fabric
 from app.db.models.notification_log import NotificationLog
+from app.db.models.notification_rule import NotificationEventType
 from app.services.live_updates import KIND_INVENTORY, publish_fabric_event
+from app.services.notifications import notify
 from app.tasks.celery_app import celery_app
 from app.unifi.client import SiteManagerError
 from app.unifi.sync import sync_fabric as apply_fabric_sync
@@ -70,6 +72,12 @@ async def _sync_fabric(fabric_id: str) -> dict[str, Any]:
             fabric.last_sync_error = str(exc)[:2000]
             await session.commit()
             if not was_failing:
+                await notify(
+                    session,
+                    NotificationEventType.FABRIC_SYNC_FAILED,
+                    fabric=fabric,
+                    context={"details": str(exc)},
+                )
                 await log_event(
                     session,
                     actor=_SYNC_ACTOR,
@@ -84,6 +92,11 @@ async def _sync_fabric(fabric_id: str) -> dict[str, Any]:
             return {"ok": False, "error": str(exc)}
         await session.commit()
     await publish_fabric_event(fabric_id, KIND_INVENTORY)
+    # Lazy: release_jobs imports this module's siblings, and is only needed
+    # once a sync has succeeded.
+    from app.tasks.release_jobs import discover_releases
+
+    discover_releases.delay(fabric_id)
     return {
         "ok": True,
         "consoles": result.consoles,

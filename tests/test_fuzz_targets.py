@@ -51,6 +51,18 @@ _SEEDS: list[bytes] = [
     b"fabric:not-a-uuid",
     b"site:",
     b"61 * * * *",
+    # Release sources: wrong types everywhere, a link off-site.
+    b'{"items": [{"id": "r", "title": "UniFi Network Application", "version": "11.0.104"},'
+    + b' {"id": 1, "title": [], "version": {}}], "comments": {"items": [{"content": "x"}]}}',
+    b'{"questions": {"items": [{"id": "q", "title": "t", "stats": []}]}}',
+    b'{"data": {"children": [{"data": {"id": "p", "title": "t",'
+    + b' "permalink": "https://evil.example"}}]}}',
+    b'[{}, {"data": {"children": [{"kind": "t1", "data": {"body": 5}}]}}]',
+    b'{"results": [{"title": "t", "url": "javascript:alert(1)"}], "web": {"results": 3}}',
+    # Model answers.
+    b'```json\n{"risk_level": "4", "summary": "s", "issues": "x"}\n```',
+    b'{"risk_level": true, "summary": "s"}',
+    b"UVC.SAV539g.v5.5.45.67.0dda191 99999999999999999999.1.1",
 ]
 
 

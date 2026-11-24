@@ -1,0 +1,56 @@
+  <section class="panel">
+    <h2>{{ t(request, "settings.releases.title") }}</h2>
+    <p class="hint">{{ t(request, "settings.releases.intro") }}</p>
+
+    <form method="post" action="/settings/releases" class="form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label for="max_acceptable_risk_level">{{ t(request, "settings.releases.max_risk") }}</label>
+      <select id="max_acceptable_risk_level" name="max_acceptable_risk_level">
+        {% for level in range(1, 6) %}
+          <option value="{{ level }}" {{ 'selected' if app_settings.max_acceptable_risk_level == level else '' }}>{{ level }} — {{ t(request, "releases.risk." ~ level) }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ t(request, "settings.releases.max_risk_hint") }}</p>
+
+      <label for="release_assessment_model_id">{{ t(request, "settings.releases.model") }}</label>
+      <select id="release_assessment_model_id" name="release_assessment_model_id">
+        <option value="">{{ t(request, "settings.releases.model_off") }}</option>
+        {% for config, model in selectable_models %}
+          <option value="{{ model.id }}" {{ 'selected' if app_settings.release_assessment_model_id == model.id else '' }}>{{ config.kind.value }} — {{ model.model_id }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">{{ t(request, "settings.releases.model_hint") }}</p>
+
+      <h3>{{ t(request, "settings.releases.sources") }}</h3>
+      <p class="hint">{{ t(request, "settings.releases.community_hint") }}</p>
+
+      <h4>Reddit</h4>
+      <label for="reddit_client_id">{{ t(request, "settings.releases.reddit_client_id") }}</label>
+      <input type="text" id="reddit_client_id" name="reddit_client_id" maxlength="255"
+             value="{{ app_settings.reddit_client_id or '' }}">
+      <label for="reddit_client_secret">{{ t(request, "settings.releases.reddit_secret") }}</label>
+      <input type="password" id="reddit_client_secret" name="reddit_client_secret" autocomplete="new-password"
+             placeholder="{{ t(request, 'settings.integrations.unchanged') if app_settings.reddit_client_secret_encrypted else '' }}">
+      <label><input type="checkbox" name="reddit_clear" value="1"> {{ t(request, "settings.releases.reddit_clear") }}</label>
+      <p class="hint">{{ t(request, "settings.releases.reddit_hint") }}</p>
+
+      <h4>{{ t(request, "settings.releases.web") }}</h4>
+      <label for="web_search_kind">{{ t(request, "settings.releases.web_kind") }}</label>
+      <select id="web_search_kind" name="web_search_kind">
+        {% for kind in web_search_kinds %}
+          <option value="{{ kind.value }}" {{ 'selected' if app_settings.web_search_kind == kind.value else '' }}>{{ t(request, "settings.releases.web_kind_" ~ kind.value) }}</option>
+        {% endfor %}
+      </select>
+      <label for="web_search_url">{{ t(request, "settings.releases.web_url") }}</label>
+      <input type="text" id="web_search_url" name="web_search_url" maxlength="500"
+             placeholder="https://searxng.example.com" value="{{ app_settings.web_search_url or '' }}">
+      <label for="web_search_api_key">{{ t(request, "settings.releases.web_key") }}</label>
+      <input type="password" id="web_search_api_key" name="web_search_api_key" autocomplete="new-password"
+             placeholder="{{ t(request, 'settings.integrations.unchanged') if app_settings.web_search_api_key_encrypted else '' }}">
+      <label><input type="checkbox" name="web_search_clear_key" value="1"> {{ t(request, "settings.releases.web_clear_key") }}</label>
+      <p class="hint">{{ t(request, "settings.releases.web_hint") }}</p>
+
+      <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    </form>
+  </section>

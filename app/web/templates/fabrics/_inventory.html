@@ -1,3 +1,4 @@
+{% from "partials/_release.html" import version_link, update_cell with context %}
 <p class="hint">
   {% if fabric.last_sync_error %}
     <span class="badge badge-error">{{ t(request, "fabrics.sync_failed") }}</span> {{ fabric.last_sync_error }}
@@ -6,6 +7,11 @@
   {% else %}
     {{ t(request, "fabrics.never_synced") }}
   {% endif %}
+</p>
+
+<p class="hint">
+  {{ t(request, "fabrics.max_risk_in_effect", level=max_risk_level) }}
+  {% if fabric_overrides_risk %}{{ t(request, "fabrics.max_risk_fabric") }}{% else %}{{ t(request, "fabrics.max_risk_global_note") }}{% endif %}
 </p>
 
 {% if not consoles %}
@@ -39,14 +45,14 @@
         <tr>
           <th>{{ t(request, "fabrics.table.component") }}</th>
           <th>{{ t(request, "fabrics.table.version") }}</th>
-          <th>{{ t(request, "fabrics.table.update_available") }}</th>
+          <th>{{ t(request, "fabrics.table.update_to") }}</th>
         </tr>
       </thead>
       <tbody>
         <tr>
           <td>UniFi OS</td>
-          <td>{{ console.os_version or '—' }}</td>
-          <td>{% if console.os_update_available %}<span class="badge badge-warn">{{ console.os_update_available }}</span>{% else %}—{% endif %}</td>
+          <td>{{ version_link('os', console.model, console.os_version) }}</td>
+          <td>{{ update_cell(verdicts.get(('os', console.id))) }}</td>
         </tr>
         {% if console.core_version %}
         <tr>
@@ -58,8 +64,8 @@
         {% for app in console.apps | sort(attribute='name') %}
         <tr>
           <td>{{ app.name | capitalize }}</td>
-          <td>{{ app.version or '—' }}</td>
-          <td>{% if app.update_available %}<span class="badge badge-warn">{{ app.update_available }}</span>{% else %}—{% endif %}</td>
+          <td>{{ version_link('app', app.name, app.version) }}</td>
+          <td>{{ update_cell(verdicts.get(('app', console.id, app.name))) }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -74,7 +80,7 @@
           <th>{{ t(request, "fabrics.table.model") }}</th>
           <th>{{ t(request, "fabrics.table.site") }}</th>
           <th>{{ t(request, "fabrics.table.version") }}</th>
-          <th>{{ t(request, "fabrics.table.update_available") }}</th>
+          <th>{{ t(request, "fabrics.table.update_to") }}</th>
           <th>{{ t(request, "common.status") }}</th>
         </tr>
       </thead>
@@ -84,12 +90,8 @@
           <td>{{ device.name or device.mac }}</td>
           <td>{{ device.model or '—' }}</td>
           <td>{{ (device.site.name or device.site.site_id) if device.site else '—' }}</td>
-          <td>{{ device.version or '—' }}</td>
-          <td>
-            {% if device.update_available %}<span class="badge badge-warn">{{ device.update_available }}</span>
-            {% elif device.has_update %}<span class="badge badge-warn" title="{{ t(request, 'fabrics.update_version_unknown_hint') }}">{{ t(request, "fabrics.update_version_unknown") }}</span>
-            {% else %}—{% endif %}
-          </td>
+          <td title="{{ device.version or '' }}">{{ version_link('firmware', device.model, device.version | normalize_version) }}</td>
+          <td>{{ update_cell(verdicts.get(('device', device.id))) }}</td>
           <td>
             {% if device.is_online %}<span class="badge badge-ok">{{ t(request, "fabrics.online") }}</span>
             {% else %}<span class="badge badge-error">{{ t(request, "fabrics.offline") }}</span>{% endif %}
