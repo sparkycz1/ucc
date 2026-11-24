@@ -36,10 +36,15 @@ _HOST = {
         "name": "HQ UDM",
         "state": "connected",
         "version": "4.1.13",
-        "hardware": {"shortname": "UDMPRO"},
+        "hardware": {"shortname": "UDMPRO", "firmwareVersion": "6.0.17"},
+        "autoUpdate": {
+            "includeApplications": True,
+            "schedule": {"day": 0, "frequency": "weekly", "hour": 3},
+        },
         "controllers": [
             {"name": "network", "version": "9.0.114", "updateAvailable": "9.1.120"},
-            {"name": "protect", "version": "5.1.0"},
+            {"name": "protect", "version": "5.1.0", "isInstalled": True},
+            {"name": "talk", "version": "", "isInstalled": False},
             {"version": "no-name-is-skipped"},
         ],
     },
@@ -53,12 +58,17 @@ def test_parse_host_reads_os_and_app_versions():
     assert host.model == "UDMPRO"
     assert host.is_online is True
     assert host.os_version == "4.1.13"
+    # `talk` is listed by Site Manager but not installed — not inventory.
     assert host.apps == [("network", "9.0.114", "9.1.120"), ("protect", "5.1.0", None)]
+    assert host.firmware_version == "6.0.17"
+    assert host.auto_update_schedule == "weekly, day 0, 03:00"
+    assert host.auto_update_include_apps is True
 
 
 def test_parse_host_tolerates_a_sparse_payload():
     host = parse_host({"id": "x"})
     assert host.name is None and host.os_version is None and host.apps == []
+    assert host.auto_update_schedule is None and host.auto_update_include_apps is None
     assert host.is_online is False
 
 
@@ -78,14 +88,25 @@ def test_parse_site_and_devices():
                     "version": "6.6.77",
                     "updateAvailable": "6.7.10",
                 },
+                {
+                    "mac": "AA:BB:CC:00:00:02",
+                    "shortname": "US48PRO",
+                    "status": "offline",
+                    "version": "",
+                    "firmwareStatus": "updateAvailable",
+                    "updateAvailable": "",
+                },
                 {"name": "no mac — skipped"},
             ],
         }
     )
-    assert len(devices) == 1
+    assert len(devices) == 2
     assert devices[0].mac == "aa:bb:cc:00:00:01"  # normalized
     assert devices[0].model == "U6-Pro"
     assert devices[0].update_available == "6.7.10"
+    # Offline devices can report "update available" with no versions at all.
+    assert devices[1].version is None and devices[1].update_available is None
+    assert devices[1].firmware_status == "updateAvailable"
 
 
 async def test_client_follows_next_token_pagination_and_sends_the_key():

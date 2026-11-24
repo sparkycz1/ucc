@@ -26,6 +26,14 @@
       · {{ t(request, "fabrics.sites_count", count=(console.sites | length)) }}
     </p>
 
+    {% if console.auto_update_schedule %}
+      <div class="alert alert-warn">
+        <p>
+          {{ t(request, "fabrics.auto_update.warning_apps" if console.auto_update_include_apps else "fabrics.auto_update.warning", schedule=console.auto_update_schedule) }}
+        </p>
+      </div>
+    {% endif %}
+
     <table class="data-table">
       <thead>
         <tr>
@@ -40,6 +48,13 @@
           <td>{{ console.os_version or '—' }}</td>
           <td>{% if console.os_update_available %}<span class="badge badge-warn">{{ console.os_update_available }}</span>{% else %}—{% endif %}</td>
         </tr>
+        {% if console.firmware_version %}
+        <tr>
+          <td>{{ t(request, "fabrics.table.console_firmware") }}</td>
+          <td>{{ console.firmware_version }}</td>
+          <td>—</td>
+        </tr>
+        {% endif %}
         {% for app in console.apps | sort(attribute='name') %}
         <tr>
           <td>{{ app.name | capitalize }}</td>
@@ -70,7 +85,11 @@
           <td>{{ device.model or '—' }}</td>
           <td>{{ (device.site.name or device.site.site_id) if device.site else '—' }}</td>
           <td>{{ device.version or '—' }}</td>
-          <td>{% if device.update_available %}<span class="badge badge-warn">{{ device.update_available }}</span>{% else %}—{% endif %}</td>
+          <td>
+            {% if device.update_available %}<span class="badge badge-warn">{{ device.update_available }}</span>
+            {% elif device.has_update %}<span class="badge badge-warn" title="{{ t(request, 'fabrics.update_version_unknown_hint') }}">{{ t(request, "fabrics.update_version_unknown") }}</span>
+            {% else %}—{% endif %}
+          </td>
           <td>
             {% if device.is_online %}<span class="badge badge-ok">{{ t(request, "fabrics.online") }}</span>
             {% else %}<span class="badge badge-error">{{ t(request, "fabrics.offline") }}</span>{% endif %}

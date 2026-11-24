@@ -40,7 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.base import ToolCall, ToolDefinition
 from app.db.models.ai_message import PendingActionStatus
 from app.db.models.console import Console
-from app.db.models.device import Device
+from app.db.models.device import Device, device_has_update
 from app.db.models.fabric import Fabric
 from app.db.models.role import Permission
 from app.db.models.user import User
@@ -199,13 +199,18 @@ async def _devices_summary(
         .limit(MAX_LISTED_DEVICES + 1)
     )
     if updates_only:
-        query = query.where(Device.update_available.is_not(None))
+        query = query.where(device_has_update())
     rows = list((await db.execute(query)).all())
     if not rows:
         return "No devices match."
     lines = []
     for device, console_name, fab_name in rows[:MAX_LISTED_DEVICES]:
-        update = f" -> {device.update_available} available" if device.update_available else ""
+        if device.update_available:
+            update = f" -> {device.update_available} available"
+        elif device.has_update:
+            update = " -> update available (version not reported)"
+        else:
+            update = ""
         status = "online" if device.is_online else "offline"
         lines.append(
             f"- [{fab_name} / {console_name}] {device.name or device.mac} "

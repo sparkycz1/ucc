@@ -12,10 +12,21 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Boolean, ColumnElement, ForeignKey, String, UniqueConstraint, func, or_
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+# Site Manager's `firmwareStatus` value for "a newer firmware exists".
+UPDATE_AVAILABLE_STATUS = "updateAvailable"
+
+
+def device_has_update() -> ColumnElement[bool]:
+    """SQL twin of `Device.has_update` — for counting/filtering in queries."""
+    return or_(
+        Device.update_available.is_not(None),
+        Device.firmware_status == UPDATE_AVAILABLE_STATUS,
+    )
 
 
 class Device(Base):
@@ -43,6 +54,13 @@ class Device(Base):
 
     version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     update_available: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Site Manager's own verdict ("upToDate", "updateAvailable", ...) — it can
+    # say an update exists while `update_available` is empty (offline devices).
+    firmware_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    @property
+    def has_update(self) -> bool:
+        return bool(self.update_available) or self.firmware_status == UPDATE_AVAILABLE_STATUS
 
     last_seen_at: Mapped[datetime | None] = mapped_column(nullable=True)
 

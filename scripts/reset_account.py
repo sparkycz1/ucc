@@ -41,7 +41,7 @@ from app.db.models.totp_recovery_code import TotpRecoveryCode
 from app.db.models.user import AuthProvider, User
 from app.db.session import AsyncSessionLocal
 
-_MIN_PASSWORD_LENGTH = 12
+_MIN_CHARS = 12
 
 
 async def _reset_account(username: str, password: str | None, *, disable_totp: bool) -> None:
@@ -64,9 +64,9 @@ async def _reset_account(username: str, password: str | None, *, disable_totp: b
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
-            if len(password) < _MIN_PASSWORD_LENGTH:
+            if len(password) < _MIN_CHARS:
                 print(
-                    f"error: password must be at least {_MIN_PASSWORD_LENGTH} characters.",
+                    f"error: password must be at least {_MIN_CHARS} characters.",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)

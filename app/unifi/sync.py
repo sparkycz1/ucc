@@ -87,6 +87,9 @@ async def apply_inventory(db: AsyncSession, fabric: Fabric, inventory: Inventory
         console.is_online = host.is_online
         console.os_version = host.os_version
         console.os_update_available = host.os_update_available
+        console.firmware_version = host.firmware_version
+        console.auto_update_schedule = host.auto_update_schedule
+        console.auto_update_include_apps = host.auto_update_include_apps
         if host.is_online:
             console.last_seen_at = now
         _apply_apps(console, host)
@@ -136,6 +139,7 @@ async def apply_inventory(db: AsyncSession, fabric: Fabric, inventory: Inventory
             device.is_online = dev_info.is_online
             device.version = dev_info.version
             device.update_available = dev_info.update_available
+            device.firmware_status = dev_info.firmware_status
             if only_site is not None:
                 device.site = only_site
             if dev_info.is_online:

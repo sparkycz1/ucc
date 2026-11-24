@@ -40,7 +40,16 @@ class HostInfo:
     is_online: bool
     os_version: str | None
     os_update_available: str | None
-    # (app name, version, update available)
+    # The console's own device firmware (`hardware.firmwareVersion`) — what
+    # Site Manager's device list reports for it, distinct from `os_version`.
+    firmware_version: str | None = None
+    # UniFi's own automatic updates (`reportedState.autoUpdate`): a short
+    # human-readable schedule ("weekly, day 0, 00:00") when one is set, and
+    # whether it also updates applications. These run on UniFi's side,
+    # outside ucc's AI gate — the UI warns about them.
+    auto_update_schedule: str | None = None
+    auto_update_include_apps: bool | None = None
+    # (app name, version, update available) — installed applications only.
     apps: list[tuple[str, str | None, str | None]] = field(default_factory=list)
 
 
@@ -63,6 +72,10 @@ class DeviceInfo:
     version: str | None
     update_available: str | None
     is_console: bool
+    # Site Manager's own verdict ("upToDate", "updateAvailable", ...). Kept
+    # because it can say an update exists while `update_available` is empty
+    # (seen on offline devices).
+    firmware_status: str | None = None
 
 
 def _str(value: Any) -> str | None:
@@ -76,6 +89,11 @@ def parse_host(raw: dict[str, Any]) -> HostInfo:
     for controller in state.get("controllers") or []:
         if not isinstance(controller, dict) or not controller.get("name"):
             continue
+        # Site Manager lists every application the console *could* run
+        # (Access, Protect, Talk, ...) with `isInstalled: false` and an empty
+        # version; only installed ones are inventory.
+        if controller.get("isInstalled") is False:
+            continue
         apps.append(
             (
                 str(controller["name"]),
@@ -84,6 +102,7 @@ def parse_host(raw: dict[str, Any]) -> HostInfo:
             )
         )
     firmware_update = state.get("firmwareUpdate") or {}
+    auto_update = state.get("autoUpdate")
     return HostInfo(
         host_id=str(raw["id"]),
         name=_str(state.get("name") or state.get("hostname")),
@@ -96,8 +115,33 @@ def parse_host(raw: dict[str, Any]) -> HostInfo:
             if isinstance(firmware_update, dict)
             else None
         ),
+        firmware_version=_str(hardware.get("firmwareVersion")),
+        auto_update_schedule=_auto_update_schedule(auto_update),
+        auto_update_include_apps=(
+            bool(auto_update["includeApplications"])
+            if isinstance(auto_update, dict)
+            and isinstance(auto_update.get("includeApplications"), bool)
+            else None
+        ),
         apps=apps,
     )
+
+
+def _auto_update_schedule(auto_update: Any) -> str | None:
+    """`{"frequency": "weekly", "day": 0, "hour": 0}` -> "weekly, day 0, 00:00";
+    `None` when the console reports no schedule. The day number is shown as
+    Site Manager reports it rather than guessed into a weekday name."""
+    if not isinstance(auto_update, dict):
+        return None
+    schedule = auto_update.get("schedule")
+    if not isinstance(schedule, dict) or not schedule.get("frequency"):
+        return None
+    parts = [str(schedule["frequency"])]
+    if isinstance(schedule.get("day"), int):
+        parts.append(f"day {schedule['day']}")
+    if isinstance(schedule.get("hour"), int):
+        parts.append(f"{schedule['hour']:02d}:00")
+    return ", ".join(parts)
 
 
 def parse_site(raw: dict[str, Any]) -> SiteInfo:
@@ -128,6 +172,7 @@ def parse_devices(raw: dict[str, Any]) -> list[DeviceInfo]:
                 version=_str(dev.get("version")),
                 update_available=_str(dev.get("updateAvailable")),
                 is_console=bool(dev.get("isConsole")),
+                firmware_status=_str(dev.get("firmwareStatus")),
             )
         )
     return result

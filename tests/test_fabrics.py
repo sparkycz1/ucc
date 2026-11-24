@@ -109,8 +109,11 @@ async def test_detail_page_shows_synced_versions(client, db_session_factory, acc
             os_update_available="4.2.5",
         )
         console.apps = [ConsoleApp(name="network", version="9.0.114", update_available="9.1.120")]
+        console.auto_update_schedule = "weekly, day 0, 00:00"
+        console.auto_update_include_apps = True
         console.devices = [
-            Device(mac="aa:bb:cc:00:00:01", name="AP Lobby", model="U6-Pro", version="6.6.77")
+            Device(mac="aa:bb:cc:00:00:01", name="AP Lobby", model="U6-Pro", version="6.6.77"),
+            Device(mac="aa:bb:cc:00:00:02", name="Core switch", firmware_status="updateAvailable"),
         ]
         db.add(console)
         await db.commit()
@@ -120,6 +123,11 @@ async def test_detail_page_shows_synced_versions(client, db_session_factory, acc
     for expected in ("HQ UDM", "4.1.13", "4.2.5", "9.1.120", "AP Lobby", "U6-Pro", "6.6.77"):
         assert expected in page.text
     assert f'data-live-fabric-id="{fabric_id}"' in page.text
+    # UniFi's own auto-update bypasses ucc's gate — warned about, with apps.
+    assert "and its applications automatically" in page.text
+    assert "weekly, day 0, 00:00" in page.text
+    # An update reported without a version still shows as available.
+    assert "Core switch" in page.text and "available</span>" in page.text
 
     panel = await client.get(f"/fabrics/{fabric_id}/inventory-panel")
     assert panel.status_code == 200

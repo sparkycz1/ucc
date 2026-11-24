@@ -21,6 +21,12 @@
         <span class="stat-value">{{ inventory_stats.consoles_with_update }}</span>
         <span class="stat-label">{{ t(request, "dashboard.stats.consoles_with_update") }}</span>
       </div>
+      {% if inventory_stats.consoles_with_auto_update %}
+      <div class="stat-card">
+        <span class="stat-value">{{ inventory_stats.consoles_with_auto_update }}</span>
+        <span class="stat-label">{{ t(request, "dashboard.stats.consoles_with_auto_update") }}</span>
+      </div>
+      {% endif %}
       <div class="stat-card">
         <span class="stat-value">{{ inventory_stats.devices }}</span>
         <span class="stat-label">{{ t(request, "dashboard.stats.devices") }}</span>

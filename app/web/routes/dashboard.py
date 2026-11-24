@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.db.models.audit_log import AuditLogEntry, AuditOutcome
 from app.db.models.console import Console
-from app.db.models.device import Device
+from app.db.models.device import Device, device_has_update
 from app.db.models.fabric import Fabric
 from app.db.models.role import Permission
 from app.db.models.scheduled_task import ScheduledTask
@@ -54,12 +54,15 @@ async def _inventory_stats(db: AsyncSession, scope: set[uuid.UUID] | None) -> di
         "consoles_with_update": (
             await db.execute(consoles.where(Console.os_update_available.is_not(None)))
         ).scalar_one(),
+        "consoles_with_auto_update": (
+            await db.execute(consoles.where(Console.auto_update_schedule.is_not(None)))
+        ).scalar_one(),
         "devices": (await db.execute(devices)).scalar_one(),
         "devices_offline": (
             await db.execute(devices.where(Device.is_online.is_(False)))
         ).scalar_one(),
         "devices_with_update": (
-            await db.execute(devices.where(Device.update_available.is_not(None)))
+            await db.execute(devices.where(device_has_update()))
         ).scalar_one(),
     }
 

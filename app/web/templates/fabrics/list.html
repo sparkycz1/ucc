@@ -27,7 +27,7 @@
     <tbody>
       {% for fabric in fabrics %}
         {% set devices = fabric.consoles | map(attribute='devices') | sum(start=[]) %}
-        {% set updatable = devices | selectattr('update_available') | list | length
+        {% set updatable = devices | selectattr('has_update') | list | length
                            + fabric.consoles | selectattr('os_update_available') | list | length %}
         <tr>
           <td>
