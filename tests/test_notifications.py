@@ -20,7 +20,12 @@ from app.db.models.notification_rule import (
 )
 from app.db.models.role import Role
 from app.db.models.user import User
-from app.services.notifications import default_template, notify, render_template
+from app.services.notifications import (
+    default_template,
+    notify,
+    render_template,
+    send_test_notification,
+)
 
 
 async def _make_role(db: AsyncSession, name: str) -> Role:
@@ -50,9 +55,7 @@ async def test_list_notifications_renders(client):
     assert "Notifications" in response.text
 
 
-async def test_new_rule_form_lists_custom_templates(
-    client, db_session_factory
-):
+async def test_new_rule_form_lists_custom_templates(client, db_session_factory):
     async with db_session_factory() as db:
         db.add(NotificationCustomTemplate(name="Weekend on-call", subject="s", body="b"))
         await db.commit()
@@ -232,9 +235,7 @@ async def test_notify_uses_rules_own_custom_template(db_session_factory, monkeyp
     def _fake_send(app_settings, to_address, subject, body):  # noqa: ANN001 - test double
         sent.append((subject, body))
 
-    import app.services.notifications as notifications_module
-
-    monkeypatch.setattr(notifications_module, "_send_smtp_message", _fake_send)
+    monkeypatch.setattr("app.services.notifications._send_smtp_message", _fake_send)
 
     async with db_session_factory() as db:
         db.add(_smtp_ready_settings())
@@ -274,15 +275,13 @@ async def test_notify_uses_rules_own_custom_template(db_session_factory, monkeyp
 
 async def test_notify_webhook_channel_posts_and_logs(db_session_factory, monkeypatch):
     posted: list[tuple[str, dict[str, str]]] = []
-
-    import app.services.notifications as notifications_module
     from app.db.models.notification_log import NotificationDeliveryStatus
 
     async def _fake_post(url, event_type, rule_name, subject, body, context):  # noqa: ANN001
         posted.append((url, {"event": event_type, "rule_name": rule_name}))
         return NotificationDeliveryStatus.SENT, None
 
-    monkeypatch.setattr(notifications_module, "_send_webhook", _fake_post)
+    monkeypatch.setattr("app.services.notifications._send_webhook", _fake_post)
 
     async with db_session_factory() as db:
         # A webhook rule fires regardless of SMTP — no _smtp_ready_settings() here.
@@ -319,12 +318,10 @@ async def test_send_test_notification_email_logs_and_targets_caller_only(
 ):
     sent: list[str] = []
 
-    import app.services.notifications as notifications_module
-
     def _fake_send(app_settings, to_address, subject, body):  # noqa: ANN001
         sent.append(to_address)
 
-    monkeypatch.setattr(notifications_module, "_send_smtp_message", _fake_send)
+    monkeypatch.setattr("app.services.notifications._send_smtp_message", _fake_send)
 
     async with db_session_factory() as db:
         db.add(_smtp_ready_settings())
@@ -342,9 +339,7 @@ async def test_send_test_notification_email_logs_and_targets_caller_only(
         await db.commit()
         await db.refresh(rule)
 
-        ok, error = await notifications_module.send_test_notification(
-            db, rule, to_email="admin@example.com"
-        )
+        ok, error = await send_test_notification(db, rule, to_email="admin@example.com")
 
     assert ok is True
     assert error is None
@@ -457,9 +452,7 @@ async def test_template_default_then_override_then_reset(client, db_session_fact
     assert update.status_code == 303
 
     async with db_session_factory() as db:
-        template = (
-            await db.execute(select(NotificationTemplate))
-        ).scalar_one()
+        template = (await db.execute(select(NotificationTemplate))).scalar_one()
         assert template.subject == "Custom subject {fabric_name}"
 
     reset = await client.post(
@@ -469,9 +462,7 @@ async def test_template_default_then_override_then_reset(client, db_session_fact
     assert reset.status_code == 303
 
     async with db_session_factory() as db:
-        remaining = (
-            await db.execute(select(NotificationTemplate))
-        ).scalars().all()
+        remaining = (await db.execute(select(NotificationTemplate))).scalars().all()
         assert remaining == []
 
 
@@ -504,9 +495,7 @@ async def test_notify_sends_to_matching_recipients_only(db_session_factory, monk
     def _fake_send(app_settings, to_address, subject, body):  # noqa: ANN001 - test double
         sent.append((to_address, subject, body))
 
-    import app.services.notifications as notifications_module
-
-    monkeypatch.setattr(notifications_module, "_send_smtp_message", _fake_send)
+    monkeypatch.setattr("app.services.notifications._send_smtp_message", _fake_send)
 
     async with db_session_factory() as db:
         db.add(_smtp_ready_settings())
@@ -549,10 +538,9 @@ async def test_notify_sends_to_matching_recipients_only(db_session_factory, monk
 
 async def test_notify_is_noop_when_smtp_disabled(db_session_factory, monkeypatch):
     sent: list[object] = []
-    import app.services.notifications as notifications_module
 
     monkeypatch.setattr(
-        notifications_module, "_send_smtp_message", lambda *a, **k: sent.append(1)
+        "app.services.notifications._send_smtp_message", lambda *a, **k: sent.append(1)
     )
 
     async with db_session_factory() as db:

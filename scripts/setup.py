@@ -254,6 +254,8 @@ def _wait_until_healthy(port: str) -> bool:
                 if response.status == 200:
                     return True
         except (urllib.error.URLError, OSError):
+            # Not up yet (connection refused, reset mid-start): expected while
+            # the stack boots — just poll again after the sleep below.
             pass
         time.sleep(_HEALTH_POLL_SECONDS)
     return False

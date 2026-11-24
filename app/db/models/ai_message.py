@@ -85,9 +85,7 @@ class AiMessage(Base):
     # by `id`, a random UUID with no relationship to insertion order.
     # Python's `datetime.now(UTC)` has microsecond resolution everywhere,
     # sidestepping the tie entirely.
-    created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC), nullable=False)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid only
         return f"AiMessage(id={self.id!r}, role={self.role!r})"

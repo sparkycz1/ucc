@@ -94,6 +94,9 @@ def _send_sync(app_settings: AppSettings, message: str) -> None:
     with socket.create_connection((host, port), timeout=_SOCKET_TIMEOUT_SECONDS) as sock:
         if app_settings.syslog_protocol == SyslogProtocol.TLS:
             context = ssl.create_default_context()
+            # The certificate is verified by default; also refuse anything
+            # older than TLS 1.2.
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             with context.wrap_socket(sock, server_hostname=host) as tls_sock:
                 tls_sock.sendall(framed)
         else:

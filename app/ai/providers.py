@@ -21,9 +21,9 @@ client is now built on the SDK that actually models it.
 
 Three different HTTP layers end up in play, purely as a fact of depending
 on these SDKs as they currently ship, not a choice made in this module:
-`anthropic` and `openai` build on `httpx2` (a distinct package from the
-plain `httpx` this app uses everywhere else); `openrouter` and
-`google-genai` both build on plain `httpx`. `http_client=`/
+`anthropic`, `openai` and `google-genai` (3.x) build on `httpx2` (a
+distinct package from the plain `httpx` this app uses everywhere else);
+`openrouter` builds on plain `httpx`. `http_client=`/
 `httpx_async_client=`/`transport=` (whichever the given SDK calls it) is
 how `tests/test_ai_providers.py` injects a `MockTransport` of the matching
 package and reaches no real network, for every client here.
@@ -95,6 +95,7 @@ MODELS_TIMEOUT_SECONDS = 15.0
 CHAT_TIMEOUT_SECONDS = 90.0
 # google-genai's `HttpOptions.timeout` wants milliseconds, not seconds.
 _GEMINI_MODELS_TIMEOUT_MS = int(MODELS_TIMEOUT_SECONDS * 1000)
+_GEMINI_API_VERSION = "v1beta"
 _GEMINI_CHAT_TIMEOUT_MS = int(CHAT_TIMEOUT_SECONDS * 1000)
 # So does `openrouter`'s `timeout_ms=`.
 _OPENROUTER_MODELS_TIMEOUT_MS = int(MODELS_TIMEOUT_SECONDS * 1000)
@@ -519,10 +520,14 @@ class GeminiClient(BaseAiClient):
     kind_value = AiProviderKind.GEMINI.value
 
     def __init__(
-        self, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None
+        self, api_key: str, *, transport: httpx2.AsyncBaseTransport | None = None
     ) -> None:
         http_options = genai_types.HttpOptions(
-            httpx_async_client=httpx.AsyncClient(transport=transport)
+            # google-genai 3 moved its default to `v1`, which lacks the
+            # `*-latest` model aliases an existing install may have picked;
+            # `v1beta` is the API this client was written and tested against.
+            api_version=_GEMINI_API_VERSION,
+            httpx_async_client=httpx2.AsyncClient(transport=transport)
             if transport is not None
             else None
         )
@@ -678,7 +683,7 @@ def build_client(config: AiProviderConfig) -> BaseAiClient:
 
     No `transport=` passthrough here (an earlier version had one, never
     actually used by any caller) — the four client classes want two
-    different transport types between them (`httpx2` for `AnthropicClient`/
+    different transport types between them (`httpx2` for `AnthropicClient`/`GeminiClient`/
     `OpenAICompatibleClient`, plain `httpx` for `OpenRouterClient`/
     `GeminiClient` — see the module docstring), so tests construct the
     client class they need directly instead of going through this factory.

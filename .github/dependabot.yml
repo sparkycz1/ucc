@@ -44,8 +44,8 @@ updates:
       docker:
         patterns: ["*"]
     ignore:
-      # Python's own image only gets patch releases (3.14.7 -> 3.14.8).
-      # Dependabot reads a tag like `3.15.0a1-slim` as an ordinary newer
+      # Python's own image only gets patch releases (3.15.2 -> 3.15.3).
+      # Dependabot reads a tag like `3.16.0a1-slim` as an ordinary newer
       # version, so without this it proposes alphas, betas and release
       # candidates of the next Python. Moving to a new Python minor
       # version is done by hand once it is stable and every dependency has

@@ -103,10 +103,7 @@ class AuditLogEntry(Base):
     entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid only
-        return (
-            f"AuditLogEntry(id={self.id!r}, action={self.action!r}, "
-            f"outcome={self.outcome!r})"
-        )
+        return f"AuditLogEntry(id={self.id!r}, action={self.action!r}, outcome={self.outcome!r})"
 
 
 class AuditChainState(Base):

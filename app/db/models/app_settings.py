@@ -85,9 +85,7 @@ class AppSettings(Base):
     # cover almost any investigation window while still being an explicit,
     # visible choice on the Settings page (not a silent app-side default
     # someone has to go looking for).
-    audit_log_retention_days: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, default=90
-    )
+    audit_log_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True, default=90)
 
     # Same idea again, for `NotificationLog` rows (app.tasks.jobs.
     # purge_old_notification_logs) — one row per actual send attempt (per
@@ -132,9 +130,7 @@ class AppSettings(Base):
     # credentials are only ever used for the final bind-as-them check (see
     # app.auth.ldap.authenticate).
     ldap_bind_dn: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    ldap_bind_password_encrypted: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True
-    )
+    ldap_bind_password_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     ldap_user_search_base: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ldap_user_search_filter: Mapped[str] = mapped_column(
         String(255), default=DEFAULT_LDAP_USER_SEARCH_FILTER, nullable=False
@@ -152,9 +148,7 @@ class AppSettings(Base):
     oidc_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     oidc_issuer_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     oidc_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    oidc_client_secret_encrypted: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True
-    )
+    oidc_client_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # Which ID-token claim is compared against a user's `username` to decide
     # which ucc account just logged in — see the module docstring and
     # User.username. Configurable since it varies by provider.

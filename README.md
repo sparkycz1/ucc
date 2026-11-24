@@ -31,7 +31,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/python/cpython"><img src="https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white" alt="Python 3.14"></a>
+  <a href="https://github.com/python/cpython"><img src="https://img.shields.io/badge/python-3.15-3776AB?logo=python&logoColor=white" alt="Python 3.15"></a>
   <a href="https://github.com/fastapi/fastapi"><img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI"></a>
   <a href="https://github.com/bigskysoftware/htmx"><img src="https://img.shields.io/badge/htmx-3366CC?logo=htmx&logoColor=white" alt="htmx"></a>
   <a href="https://github.com/sqlalchemy/sqlalchemy"><img src="https://img.shields.io/badge/SQLAlchemy%202.0-D71F00?logo=sqlalchemy&logoColor=white" alt="SQLAlchemy 2.0"></a>
