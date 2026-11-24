@@ -79,7 +79,7 @@ dependencies = [
     # module's own docstring for the (two, as it happens) underlying HTTP
     # libraries these four build on, and how tests inject a mock transport
     # of the matching one.
-    "anthropic>=1.3.0",
+    "anthropic>=2.12.0",
     # Also used for plain OpenAI and any self-hosted "OpenAI-compatible"
     # endpoint (litellm, vLLM, a corporate gateway) — both speak this SDK's
     # exact wire format, differing only in `base_url` and whether a key is
