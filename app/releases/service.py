@@ -179,7 +179,6 @@ async def ensure_releases(db: AsyncSession, targets: Iterable[UpdateTarget]) -> 
 # even offers it.
 
 CATALOG_VERSIONS = 3
-CATALOG_REFRESH_AFTER = timedelta(hours=6)
 
 
 def catalog_products() -> list[tuple[str, str]]:
@@ -187,13 +186,12 @@ def catalog_products() -> list[tuple[str, str]]:
     return list(APP_TITLES.items())
 
 
-async def refresh_catalog(db: AsyncSession, *, now: datetime | None = None) -> list[Release]:
+async def refresh_catalog(db: AsyncSession) -> list[Release]:
     """Read each application's newest release posts from community.ui.com
     and upsert them as `Release` rows (kind=app). Does not commit. Returns
     the catalogue's current rows (newest `CATALOG_VERSIONS` per
     application). A community.ui.com failure stops the refresh, leaving the
     existing rows as they are."""
-    now = now or datetime.now(UTC)
     community = CommunityClient()
     try:
         for product, title in catalog_products():
