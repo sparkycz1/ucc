@@ -28,7 +28,7 @@ dependencies = [
     # kombu's, and repeating a stricter one here would only mask it. Only the
     # lower bound stays, since the app is not tested below 5.3.1.
     # See wiki/Architecture.md, "Dependency version notes".
-    "redis[hiredis]>=5.3.1",
+    "redis[hiredis]>=8.1.0",
     # Task queue: broker AND result backend are the same Redis instance
     # (REDIS_URL). `[redis]` pulls kombu's redis transport. See
     # app/tasks/celery_app.py and wiki/Architecture.md.
