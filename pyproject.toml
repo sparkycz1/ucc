@@ -1,51 +1,48 @@
 [project]
 name = "ucc"
-version = "0.1.0"
+version = "0.1.1"
 description = "UniFi Control Center — AI-gated management of UniFi firmware and application updates"
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "PolyForm-Noncommercial-1.0.0" }
 
 dependencies = [
-    "fastapi>=0.141.1",
+    "fastapi>=0.165.0",
     "uvicorn[standard]>=0.52.4",
-    # Lower bound is `openrouter`'s own ceiling (`pydantic>=2.11.2,<2.13`,
-    # every 1.x release so far — see that dependency's own comment below),
-    # not a feature floor of this app's — nothing here needs anything
-    # pydantic 2.13 added. `uv lock` currently resolves this to 2.12.x
-    # because of that ceiling; the full test suite + `mypy --strict`-style
-    # gate both pass at that version. Revisit once `openrouter` lifts it.
-    "pydantic>=2.11.2",
-    "pydantic-settings>=2.15.0",
-    "sqlalchemy[asyncio]>=2.0.52",
-    "asyncpg>=0.31.0",
-    "alembic>=1.19.1",
+    # `openrouter` used to cap this at <2.13 (its 1.x releases up to
+    # 1.3.66); 1.3.76+ allows any pydantic 2.x, and Python 3.15 needs a
+    # pydantic-core with cp315 wheels, so the lock is on 2.14 now.
+    "pydantic>=2.14.4",
+    "pydantic-settings>=2.16.3",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "asyncpg>=0.32.0",
+    "alembic>=1.20.1",
     # Note: the `redis-py` client library is independent from the Redis SERVER
     # version (8.10). It used to carry a hard `<6` cap here, purely because the
     # old task queue (arq) refused redis-py 6.x. That reason is gone: the queue
     # is Celery now, and `kombu[redis]` (Celery's transport layer) declares
-    # `redis >=4.5.2,!=4.5.5,!=5.0.2,<6.5` itself — so the real upper bound is
-    # kombu's, and repeating a stricter one here would only mask it. Only the
-    # lower bound stays, since the app is not tested below 5.3.1.
+    # its own range itself — so the real upper bound is kombu's, and
+    # repeating a stricter one here would only mask it. Only the lower bound
+    # stays.
     # See wiki/Architecture.md, "Dependency version notes".
-    "redis[hiredis]>=5.3.1",
+    "redis[hiredis]>=8.1.0",
     # Task queue: broker AND result backend are the same Redis instance
     # (REDIS_URL). `[redis]` pulls kombu's redis transport. See
     # app/tasks/celery_app.py and wiki/Architecture.md.
-    "celery[redis]>=5.6.3",
+    "celery[redis]>=5.7.0",
     "jinja2>=3.1.6",
-    "python-multipart>=0.0.32",
-    "cryptography>=50.0.1",
+    "python-multipart>=0.0.34",
+    "cryptography>=50.0.2",
     "itsdangerous>=2.2.0",
     # Standard 5-field cron expression parsing/next-run computation for
     # Scheduling (app/scheduling/). Well-established, tiny, no transitive deps.
-    "croniter>=6.0.0",
+    "croniter>=7.0.0",
     # YAML export/import for condition-based Notification rules
     # (app/web/routes/notifications.py) — already an indirect dependency
     # (a Celery-ecosystem package pulls it in), promoted to direct since
     # this app now imports it itself rather than only relying on it
     # transitively.
-    "pyyaml>=6.0.3",
+    "pyyaml>=6.0.4",
     # --- Authentication (app/auth/) ---
     # Argon2id password hashing for local accounts — current OWASP-recommended
     # default, memory-hard (better GPU/ASIC resistance than bcrypt).
@@ -67,7 +64,7 @@ dependencies = [
     # --no-dev` fails to import app.main at all.
     "httpx>=0.28.1",
     # TOTP (RFC 6238) generation/verification for two-factor authentication.
-    "pyotp>=2.10.0",
+    "pyotp>=2.12.1",
     # Renders the TOTP enrollment QR code as inline SVG — deliberately used
     # without its optional Pillow/PNG extra, which isn't needed for that.
     "qrcode>=8.2",
@@ -79,23 +76,22 @@ dependencies = [
     # module's own docstring for the (two, as it happens) underlying HTTP
     # libraries these four build on, and how tests inject a mock transport
     # of the matching one.
-    "anthropic>=1.3.0",
+    "anthropic>=2.12.0",
     # Also used for plain OpenAI and any self-hosted "OpenAI-compatible"
     # endpoint (litellm, vLLM, a corporate gateway) — both speak this SDK's
     # exact wire format, differing only in `base_url` and whether a key is
     # required. See `OpenAICompatibleClient`. NOT used for OpenRouter
     # (below) even though OpenRouter's API is also OpenAI-compatible — it
     # has its own dedicated SDK, which is what this app uses for it instead.
-    "openai>=3.6.0",
-    # OpenRouter's own SDK — see `OpenRouterClient`. 1.x (declared "stable
-    # as of v1.0") pins `pydantic<2.13`, hence this project's own pydantic
-    # floor above; 1.x also changed `models.list_async`'s response shape
+    "openai>=3.57.0",
+    # OpenRouter's own SDK — see `OpenRouterClient`. 1.3.76+ no longer caps
+    # pydantic. 1.x changed `models.list_async`'s response shape
     # (`response.result.data` instead of `response.data`, and it can
     # legitimately return `None`) and added pagination query params to the
     # models endpoint — both handled in `OpenRouterClient.list_models`.
     # `chat.send_async`'s shape (`.choices`/`.usage`/tool-call parsing) is
     # unchanged from 0.x.
-    "openrouter>=1.1.139",
+    "openrouter>=1.3.106",
     # Google's SDK for Gemini — see `GeminiClient`.
     "google-genai>=2.21.0",
     # Renders a machine's runbook (Overview tab) from Markdown to HTML —
@@ -103,24 +99,24 @@ dependencies = [
     # its default escape=True (raw HTML in the source is escaped to text,
     # not passed through), so a runbook can't inject markup even though
     # only machine.manage accounts can edit one. See app.web.templating.
-    "mistune>=3.0.0",
+    "mistune>=3.4.0",
     # WebAuthn/passkey registration and authentication ceremony verification
     # (RP-side): attestation/assertion signature checking, challenge
     # handling. The de facto standard Python implementation (py_webauthn) —
     # see app/auth/webauthn.py. Pulls in cbor2 (CBOR decoding for
     # attestation objects) and pyOpenSSL (certificate chain validation for
     # attestation) as transitive dependencies.
-    "webauthn>=2.0.0",
+    "webauthn>=3.0.1",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
     "aiosqlite>=0.22.1",
-    "ruff>=0.16.4",
-    "mypy>=2.3.1",
-    "python-dotenv>=1.2.3",
+    "ruff>=0.17.6",
+    "mypy>=2.4.1",
+    "python-dotenv>=1.2.4",
     "types-authlib>=1.7.2.20260827",
     "types-croniter>=6.0.0",
     "types-ldap3>=2.9.13.20260827",
@@ -132,7 +128,7 @@ dev = [
 package = false
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py315"
 line-length = 100
 
 [tool.ruff.lint]
@@ -148,7 +144,7 @@ ignore = ["S101", "B008"]
 "app/db/models/machine.py" = ["S105"]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.15"
 plugins = ["pydantic.mypy"]
 strict = true
 warn_unused_ignores = true

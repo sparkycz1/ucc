@@ -29,16 +29,12 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, LargeBinary, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.pg_enum import pg_enum
-
-if TYPE_CHECKING:
-    from app.db.models.ai_model import AiModel
 
 
 class AiProviderKind(enum.StrEnum):
@@ -98,4 +94,4 @@ class AiProviderConfig(Base):
 # process happening to have imported it first — which is exactly the kind of
 # thing that holds in the web app and then breaks in a Celery worker with a
 # narrower import graph.
-from app.db.models.ai_model import AiModel  # noqa: E402, F401  (see above)
+from app.db.models.ai_model import AiModel  # noqa: E402  (see above)

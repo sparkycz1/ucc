@@ -47,8 +47,8 @@ jobs:
           # Downloaded wheels cached between runs (keyed on uv.lock).
           enable-cache: true
 
-      - name: Install Python 3.14
-        run: uv python install 3.14
+      - name: Install Python 3.15
+        run: uv python install 3.15
 
       - name: Install dependencies
         run: uv sync --locked
@@ -113,7 +113,7 @@ jobs:
           enable-cache: true
 
       - name: Install Python
-        run: uv python install 3.14
+        run: uv python install 3.15
 
       - name: Install dependencies
         run: uv sync --locked
@@ -140,8 +140,8 @@ jobs:
           # Downloaded wheels cached between runs (keyed on uv.lock).
           enable-cache: true
 
-      - name: Install Python 3.14
-        run: uv python install 3.14
+      - name: Install Python 3.15
+        run: uv python install 3.15
 
       # Known-CVE scan of everything uv.lock pins — separate from Dependabot
       # (which watches for *newer* fixed versions existing at all) in that

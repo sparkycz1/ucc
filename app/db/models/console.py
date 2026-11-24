@@ -16,11 +16,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
-if TYPE_CHECKING:
-    from app.db.models.device import Device
-    from app.db.models.fabric import Fabric
-    from app.db.models.site import Site
-
 
 class Console(Base):
     __tablename__ = "consoles"
@@ -82,3 +77,14 @@ class ConsoleApp(Base):
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+# Imported last, and only for type checking: every class above is already
+# defined by the time this module points back at the models it relates
+# to, so no import cycle can leave a class half-defined (CodeQL's
+# "Module-level cyclic import"). SQLAlchemy resolves the relationship
+# targets by name through its registry, never through these imports.
+if TYPE_CHECKING:
+    from app.db.models.device import Device
+    from app.db.models.fabric import Fabric
+    from app.db.models.site import Site

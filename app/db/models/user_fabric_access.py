@@ -48,6 +48,4 @@ class UserFabricAccess(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid only
-        return (
-            f"UserFabricAccess(user_id={self.user_id!r}, fabric_id={self.fabric_id!r})"
-        )
+        return f"UserFabricAccess(user_id={self.user_id!r}, fabric_id={self.fabric_id!r})"

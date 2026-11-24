@@ -42,11 +42,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
-if TYPE_CHECKING:
-    from app.db.models.fabric import Fabric
-    from app.db.models.role import Role
-    from app.db.models.user import User
-
 
 class NotificationEventType(enum.StrEnum):
     """The fixed set of events a rule can fire on. Adding a new one means
@@ -109,12 +104,8 @@ class NotificationRule(Base):
         server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    users: Mapped[list[User]] = relationship(
-        secondary=notification_rule_users, lazy="selectin"
-    )
-    roles: Mapped[list[Role]] = relationship(
-        secondary=notification_rule_roles, lazy="selectin"
-    )
+    users: Mapped[list[User]] = relationship(secondary=notification_rule_users, lazy="selectin")
+    roles: Mapped[list[Role]] = relationship(secondary=notification_rule_roles, lazy="selectin")
     fabrics: Mapped[list[Fabric]] = relationship(
         secondary=notification_rule_fabrics, lazy="selectin"
     )
@@ -207,3 +198,14 @@ class NotificationCustomTemplate(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid only
         return f"NotificationCustomTemplate(name={self.name!r})"
+
+
+# Imported last, and only for type checking: every class above is already
+# defined by the time this module points back at the models it relates
+# to, so no import cycle can leave a class half-defined (CodeQL's
+# "Module-level cyclic import"). SQLAlchemy resolves the relationship
+# targets by name through its registry, never through these imports.
+if TYPE_CHECKING:
+    from app.db.models.fabric import Fabric
+    from app.db.models.role import Role
+    from app.db.models.user import User

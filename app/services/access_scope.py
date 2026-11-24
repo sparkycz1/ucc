@@ -45,7 +45,7 @@ async def is_restricted(db: AsyncSession, user: User) -> bool:
     return await allowed_fabric_ids(db, user) is not None
 
 
-async def fabrics_visible_to(db: AsyncSession, user: User) -> Select[tuple[Fabric]]:
+async def fabrics_visible_to(db: AsyncSession, user: User) -> Select[Fabric]:
     """A `Select` for `Fabric`, already scope-filtered and still composable."""
     query = select(Fabric)
     fabric_ids = await allowed_fabric_ids(db, user)

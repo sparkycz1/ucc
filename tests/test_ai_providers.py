@@ -6,11 +6,11 @@ obvious reason and because these assertions are about the request this app
 *builds*, which a live API would only answer, never confirm.
 
 Two mock-transport flavors, matching `app.ai.providers`' own split:
-`_transport` (plain `httpx.MockTransport`) for `OpenRouterClient`/
-`GeminiClient`, which build on plain `httpx`; `_transport2`
-(`httpx2.MockTransport`) for `AnthropicClient`/`OpenAICompatibleClient`,
-which hand their SDK an `httpx2.AsyncClient` as `http_client=` —
-`anthropic`/`openai` build on `httpx2` (a distinct package from plain
+`_transport` (plain `httpx.MockTransport`) for `OpenRouterClient`, which
+builds on plain `httpx`; `_transport2` (`httpx2.MockTransport`) for
+`AnthropicClient`/`OpenAICompatibleClient`/`GeminiClient`, which hand
+their SDK an `httpx2.AsyncClient` — `anthropic`/`openai`/`google-genai`
+build on `httpx2` (a distinct package from plain
 `httpx`) for their own HTTP layer, not something this app chose, just how
 those SDKs currently ship.
 """
@@ -72,8 +72,10 @@ async def test_anthropic_list_models_follows_pagination():
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen_params.append(dict(request.url.params))
-        assert request.headers["x-api-key"] == "secret-key"
-        assert request.headers["anthropic-version"] == "2023-06-01"
+        # anthropic 2.x sends the key as a Bearer token (1.x used x-api-key)
+        # and pins its own, newer API version — the SDK's call, not ours.
+        assert request.headers["authorization"] == "Bearer secret-key"
+        assert request.headers["anthropic-version"]
         if "after_id" not in request.url.params:
             return httpx2.Response(
                 200,
@@ -294,6 +296,8 @@ async def test_openrouter_list_models():
                 "data": [
                     {
                         "id": "openai/gpt-5",
+                        # Required by the SDK since 1.3.10x (the API's own shape).
+                        "endpoints": ["/api/v1/chat/completions"],
                         "name": "GPT-5",
                         "created": 1,
                         "canonical_slug": "openai/gpt-5",
@@ -424,9 +428,9 @@ async def test_openrouter_http_error_becomes_provider_error_without_the_key():
 
 
 async def test_gemini_list_models_filters_and_strips_prefix():
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["x-goog-api-key"] == "gem-key"
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "models": [
@@ -446,7 +450,7 @@ async def test_gemini_list_models_filters_and_strips_prefix():
             },
         )
 
-    client = GeminiClient("gem-key", transport=_transport(handler))
+    client = GeminiClient("gem-key", transport=_transport2(handler))
     models = await client.list_models()
 
     assert [m.id for m in models] == ["gemini-pro"]
@@ -456,10 +460,10 @@ async def test_gemini_list_models_filters_and_strips_prefix():
 async def test_gemini_send_builds_the_documented_request_shape():
     captured: dict[str, Any] = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["path"] = request.url.path
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}}],
@@ -467,7 +471,7 @@ async def test_gemini_send_builds_the_documented_request_shape():
             },
         )
 
-    client = GeminiClient("gem-key", transport=_transport(handler))
+    client = GeminiClient("gem-key", transport=_transport2(handler))
     result = await client.send(
         [{"role": "user", "parts": [{"text": "hi"}]}], TOOLS, "gemini-pro", "SYSTEM"
     )
@@ -491,12 +495,12 @@ async def test_gemini_send_tool_call_and_function_response_round_trip():
         {"functionCall": {"name": "list_machines", "id": "fc_1", "args": {"group_name": "web"}}}
     ]
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200, json={"candidates": [{"content": {"role": "model", "parts": parts}}]}
         )
 
-    client = GeminiClient("gem-key", transport=_transport(handler))
+    client = GeminiClient("gem-key", transport=_transport2(handler))
     result = await client.send(
         [{"role": "user", "parts": [{"text": "hi"}]}], TOOLS, "gemini-pro", "SYSTEM"
     )
@@ -526,12 +530,12 @@ async def test_gemini_synthesized_call_id_is_not_echoed_back():
     be sent back as if the provider had issued it."""
     parts = [{"functionCall": {"name": "list_groups", "args": {}}}]
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             200, json={"candidates": [{"content": {"role": "model", "parts": parts}}]}
         )
 
-    client = GeminiClient("gem-key", transport=_transport(handler))
+    client = GeminiClient("gem-key", transport=_transport2(handler))
     result = await client.send(
         [{"role": "user", "parts": [{"text": "hi"}]}], TOOLS, "gemini-pro", "SYSTEM"
     )
@@ -541,10 +545,10 @@ async def test_gemini_synthesized_call_id_is_not_echoed_back():
 
 
 async def test_gemini_http_error_becomes_provider_error_without_the_key():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, json={"error": {"message": "invalid api key", "code": 401}})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, json={"error": {"message": "invalid api key", "code": 401}})
 
-    client = GeminiClient("super-secret-key", transport=_transport(handler))
+    client = GeminiClient("super-secret-key", transport=_transport2(handler))
     with pytest.raises(AiProviderError) as excinfo:
         await client.list_models()
 
