@@ -4,7 +4,7 @@
 Read-only by default. Stdlib only, so it runs anywhere:
 
     UNIFI_API_KEY=... python3 scripts/probe_connector.py
-    UNIFI_API_KEY=... python3 scripts/probe_connector.py --host <hostId>
+    UNIFI_API_KEY=... python3 scripts/probe_connector.py --host-name <console name>
     UNIFI_API_KEY=... python3 scripts/probe_connector.py --host <hostId> \\
         --upgrade-device <mac> --site default --yes-really-upgrade
 
@@ -80,11 +80,54 @@ def items(payload: Any) -> list[dict[str, Any]]:
     return payload if isinstance(payload, list) else []
 
 
+def _host_name(h: dict[str, Any]) -> str:
+    rs = h.get("reportedState") or {}
+    return str(rs.get("name") or rs.get("hostname") or "")
+
+
+def _print_pending(host: dict[str, Any], devices_payload: Any) -> set[str]:
+    """What is waiting to be updated on this console, from Site Manager's
+    own data. Returns the names of the installed applications."""
+    rs = host.get("reportedState") or {}
+    hw = rs.get("hardware") or {}
+    fw_update = rs.get("firmwareUpdate") or {}
+    print(f"\n=== {_host_name(host)} ({hw.get('name') or hw.get('shortname')})")
+    print(
+        f"  UniFi OS {rs.get('version')}  firmware {hw.get('firmwareVersion')}"
+        f"  -> update: {fw_update.get('latestAvailableVersion') or 'none reported'}"
+    )
+    print(f"  UniFi auto-update: {json.dumps(rs.get('autoUpdate'))}")
+    installed: set[str] = set()
+    for ctl in rs.get("controllers") or []:
+        if not isinstance(ctl, dict) or ctl.get("isInstalled") is False:
+            continue
+        installed.add(str(ctl.get("name")))
+        print(
+            f"  app {ctl.get('name')}: {ctl.get('version')}"
+            f"  -> update: {ctl.get('updateAvailable') or 'none'}"
+            f"  updatable={ctl.get('updatable')}  state={ctl.get('state')}"
+        )
+    for entry in items(devices_payload):
+        if entry.get("hostId") != host.get("id"):
+            continue
+        for dev in entry.get("devices") or []:
+            print(
+                f"  device {dev.get('name')} [{dev.get('shortname') or dev.get('model')}]"
+                f" mac={dev.get('mac')} {dev.get('version') or '?'}"
+                f" status={dev.get('status')} firmwareStatus={dev.get('firmwareStatus')}"
+                f" -> {dev.get('updateAvailable') or '-'}"
+            )
+    return installed
+
+
 def main() -> int:
+    global OUT
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--host", help="hostId (console) to probe via connector")
-    ap.add_argument("--site", default="default", help="legacy site name")
-    ap.add_argument("--upgrade-device", metavar="MAC")
+    target = ap.add_mutually_exclusive_group()
+    target.add_argument("--host", help="hostId (console) to probe via connector")
+    target.add_argument("--host-name", help="console name as shown in Site Manager")
+    ap.add_argument("--site", default="default", help="legacy Network site name")
+    ap.add_argument("--upgrade-device", metavar="MAC", help="Network device to upgrade")
     ap.add_argument("--yes-really-upgrade", action="store_true")
     args = ap.parse_args()
 
@@ -96,60 +139,76 @@ def main() -> int:
     # --- Site Manager read endpoints -------------------------------------
     hosts = items(probe(key, "GET", "/v1/hosts", "consoles"))
     probe(key, "GET", "/v1/sites", "sites")
-    probe(key, "GET", "/v1/devices", "devices + firmware status")
+    devices_payload = probe(key, "GET", "/v1/devices", "devices + firmware status")
 
     print(f"\n{len(hosts)} host(s):")
     for h in hosts:
         rs = h.get("reportedState") or {}
         print(
-            f"  {h.get('id')}  {rs.get('hostname') or rs.get('name')}"
-            f"  type={h.get('type')}  version={rs.get('version')}"
-            f"  fw={rs.get('firmwareVersion') or rs.get('firmware_version')}"
+            f"  {h.get('id')}  {_host_name(h)}  type={h.get('type')}  UniFi OS {rs.get('version')}"
         )
 
-    host = args.host or (hosts[0]["id"] if hosts else None)
-    if not host:
+    if args.host_name:
+        wanted = args.host_name.strip().lower()
+        matches = [h for h in hosts if _host_name(h).lower() == wanted]
+        if not matches:
+            print(f"\nNo console named {args.host_name!r} for this key.")
+            return finish()
+        host_obj = matches[0]
+    elif args.host:
+        host_obj = next((h for h in hosts if h.get("id") == args.host), {"id": args.host})
+    elif hosts:
+        host_obj = hosts[0]
+    else:
         print("No host to probe via connector.")
         return finish()
+    host = str(host_obj["id"])
+    # One folder per console, so runs against different consoles don't mix.
+    OUT = OUT / (_host_name(host_obj) or host.split(":")[0][:12])
+    installed = _print_pending(host_obj, devices_payload)
 
     c = f"/v1/connector/consoles/{host}"
-    # Spec is ambiguous whether "proxy/" is part of the path -> try both.
-    probe(key, "GET", f"{c}/network/integration/v1/info", "integration info (no proxy/)")
-    probe(key, "GET", f"{c}/proxy/network/integration/v1/info", "integration info (proxy/)")
-    sites = items(probe(key, "GET", f"{c}/proxy/network/integration/v1/sites", "integration sites"))
-    for s in sites[:3]:
-        probe(
-            key,
-            "GET",
-            f"{c}/proxy/network/integration/v1/sites/{s.get('id')}/devices",
-            "integration devices",
-        )
-
-    # Legacy Network API (has upgradable / upgrade_to_firmware / cmd/devmgr)
-    probe(key, "GET", f"{c}/proxy/network/api/self/sites", "legacy sites")
-    probe(
-        key,
-        "GET",
-        f"{c}/proxy/network/api/s/{args.site}/stat/sysinfo",
-        "legacy sysinfo (Network app version)",
-    )
-    devs = items(
-        probe(key, "GET", f"{c}/proxy/network/api/s/{args.site}/stat/device", "legacy devices")
-    )
-    upg = [d for d in devs if d.get("upgradable")]
-    print(f"\nlegacy stat/device: {len(devs)} device(s), {len(upg)} upgradable")
-    for d in upg:
-        print(
-            f"  {d.get('mac')} {d.get('name')} {d.get('version')} -> {d.get('upgrade_to_firmware')}"
-        )
-
-    # UniFi OS / app update endpoints (local paths outside /proxy/)
+    # UniFi OS itself (local paths outside /proxy/) — 403 with a read-only
+    # key so far; a write-enabled key may differ.
     probe(key, "GET", f"{c}/api/firmware/update", "UniFi OS fw update info")
     probe(key, "GET", f"{c}/api/system", "UniFi OS system")
     probe(key, "GET", f"{c}/api/controllers", "UniFi OS apps")
-    probe(key, "GET", f"{c}/proxy/protect/integration/v1/meta/info", "Protect version")
+    probe(key, "GET", f"{c}/proxy/api/firmware/update", "UniFi OS fw update (proxy/ form)")
 
-    # --- Optional single write ------------------------------------------
+    if "network" in installed or not installed:
+        probe(key, "GET", f"{c}/proxy/network/integration/v1/info", "Network integration info")
+        sites = items(probe(key, "GET", f"{c}/proxy/network/integration/v1/sites", "Network sites"))
+        for s in sites[:3]:
+            probe(
+                key,
+                "GET",
+                f"{c}/proxy/network/integration/v1/sites/{s.get('id')}/devices",
+                "Network integration devices",
+            )
+        probe(key, "GET", f"{c}/proxy/network/api/self/sites", "Network legacy sites")
+        devs = items(
+            probe(key, "GET", f"{c}/proxy/network/api/s/{args.site}/stat/device", "legacy devices")
+        )
+        upg = [d for d in devs if d.get("upgradable")]
+        print(f"\nNetwork legacy stat/device: {len(devs)} device(s), {len(upg)} upgradable")
+        for d in upg:
+            print(
+                f"  {d.get('mac')} {d.get('name')} {d.get('version')}"
+                f" -> {d.get('upgrade_to_firmware')}"
+            )
+
+    if "protect" in installed:
+        probe(key, "GET", f"{c}/proxy/protect/integration/v1/meta/info", "Protect version")
+        cams = items(probe(key, "GET", f"{c}/proxy/protect/integration/v1/cameras", "cameras"))
+        print(f"\nProtect integration: {len(cams)} camera(s)")
+        for cam in cams[:50]:
+            print(
+                f"  {cam.get('name')} [{cam.get('modelKey') or cam.get('type')}]"
+                f" mac={cam.get('mac')} state={cam.get('state')}"
+                f" fw={cam.get('firmwareVersion')}"
+            )
+
+    # --- Optional single write (Network device firmware only) -------------
     if args.upgrade_device:
         if not args.yes_really_upgrade:
             print("\n--upgrade-device given without --yes-really-upgrade: skipped.")
