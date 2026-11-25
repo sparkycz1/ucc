@@ -664,6 +664,8 @@
     "catalog.empty": "No releases read from community.ui.com yet — the list is read when the beat service starts and then every day (Settings → Checks); “Refresh now” reads it right away.",
     "catalog.published": "Published",
     "catalog.yours": "Your consoles",
+    "catalog.more": "More info",
+    "catalog.more_hint": "The full assessment: summary, every problem found, all sources, rating history and which of your consoles/devices it concerns.",
     "catalog.section.app": "Applications",
     "catalog.section.os": "UniFi OS",
     "catalog.section.firmware": "Device firmware",
