@@ -36,6 +36,7 @@
         <th>{{ t(request, "releases.sources") }}</th>
         <th>{{ t(request, "releases.table.pending") }}</th>
         <th>{{ t(request, "releases.table.assessed") }}</th>
+        <th><span class="visually-hidden">{{ t(request, "catalog.more") }}</span></th>
       </tr>
     </thead>
     <tbody>
@@ -70,6 +71,7 @@
             {% elif release.assessment_error %}<span class="badge badge-error" title="{{ release.assessment_error }}">{{ t(request, "releases.failed") }}</span>
             {% else %}—{% endif %}
           </td>
+          <td class="nowrap"><a class="button button-secondary button-small" href="/releases/{{ release.id }}" title="{{ t(request, 'catalog.more_hint') }}">{{ t(request, "catalog.more") }}</a></td>
         </tr>
       {% endfor %}
     </tbody>
