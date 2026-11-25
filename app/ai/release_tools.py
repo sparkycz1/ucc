@@ -25,7 +25,13 @@ from app.db.models.release import Release, ReleaseKind
 from app.db.models.user import User
 from app.releases.assess import build_prompt
 from app.releases.products import APP_TITLES, version_key
-from app.releases.service import catalog, gather_evidence, product_label, visible_verdicts
+from app.releases.service import (
+    catalog,
+    gather_evidence,
+    model_names,
+    product_label,
+    visible_verdicts,
+)
 from app.releases.versions import normalize_version
 
 # Bounded, like every tool result: the model gets enough to judge, not a
@@ -54,6 +60,20 @@ def resolve_product(text: str) -> tuple[str | None, str]:
         if key in lowered.split() or f"unifi {key}" in lowered:
             return ReleaseKind.APP.value, key
     return None, text.strip()
+
+
+def _compact(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+async def _model_code(db: AsyncSession, text: str) -> str:
+    """ "UCG-Ultra" / "ucg ultra" → its synced model code ("UDRULT"); else
+    `text` unchanged — releases are keyed on the code."""
+    wanted = _compact(text)
+    for code, name in (await model_names(db)).items():
+        if wanted in (_compact(name), _compact(code)):
+            return code
+    return text
 
 
 def _level(release: Release) -> str:
@@ -97,6 +117,8 @@ async def list_release_ratings(db: AsyncSession, user: User, product: str | None
     selected = list(releases.values())
     if product:
         kind, key = resolve_product(product)
+        if kind is None:
+            key = await _model_code(db, key)
         wanted = key.lower()
         selected = [
             r
@@ -125,6 +147,8 @@ async def list_release_ratings(db: AsyncSession, user: User, product: str | None
 async def _find(db: AsyncSession, product: str, version: str) -> list[Release]:
     normalized = normalize_version(version) or version.strip()
     kind, key = resolve_product(product)
+    if kind is None:
+        key = await _model_code(db, key)
     query = select(Release).where(Release.version == normalized)
     if kind is not None:
         query = query.where(Release.kind == kind, Release.product == key)
@@ -170,7 +194,11 @@ async def get_release_rating(db: AsyncSession, user: User, product: str, version
             lines.append(f"Summary: {release.summary}")
         for issue in release.issues or []:
             if isinstance(issue, dict) and issue.get("title"):
-                lines.append(f"- issue: {issue['title']} {issue.get('detail') or ''}".rstrip())
+                reports = issue.get("reports")
+                count = f" [{reports} independent reports]" if isinstance(reports, int) else ""
+                lines.append(
+                    f"- issue: {issue['title']}{count} {issue.get('detail') or ''}".rstrip()
+                )
         if release.assessed_at:
             lines.append(
                 f"Assessed {release.assessed_at.date().isoformat()} by {release.assessed_by_model}"
@@ -198,6 +226,8 @@ async def read_release_reports(
     db: AsyncSession, product: str, version: str, kind: str | None
 ) -> str:
     resolved_kind, key = resolve_product(product)
+    if resolved_kind is None:
+        key = await _model_code(db, key)
     chosen_kind = resolved_kind or (kind if kind in {k.value for k in ReleaseKind} else None)
     if chosen_kind is None:
         chosen_kind = ReleaseKind.FIRMWARE.value

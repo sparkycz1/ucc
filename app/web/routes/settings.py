@@ -161,9 +161,10 @@ async def update_background_checks(
     request: Request,
     db: AsyncSession = Depends(get_db),
     inventory_sync_interval_seconds: str = Form(""),
+    release_catalog_interval_hours: str = Form(""),
 ) -> Response:
-    """The inventory sync interval. Only read by Celery Beat at its own
-    process start (`app.tasks.celery_app`), so a change needs a restart of
+    """The inventory sync and Releases catalogue intervals. Only read by
+    Celery Beat at its own process start (`app.tasks.celery_app`), so a change needs a restart of
     the beat service — see `settings.checks.background_checks_hint`.
 
     The lower bound keeps a sweep well inside Site Manager's rate limits
@@ -177,15 +178,31 @@ async def update_background_checks(
     )
     if error or value is None:
         return await _render_settings(request, db, [error or "Invalid value."], tab="checks")
+    # Optional, so a form from before 0.2.3 still saves.
+    hours = app_settings.release_catalog_interval_hours
+    if release_catalog_interval_hours.strip():
+        parsed, error = _parse_bounded_int(
+            release_catalog_interval_hours,
+            label="Releases catalogue refresh interval",
+            minimum=1,
+            maximum=168,
+        )
+        if error or parsed is None:
+            return await _render_settings(request, db, [error or "Invalid value."], tab="checks")
+        hours = parsed
 
     app_settings.inventory_sync_interval_seconds = value
+    app_settings.release_catalog_interval_hours = hours
     await db.commit()
     await log_event(
         db,
         request=request,
         action="settings.background_checks.update",
-        summary=f"Set the inventory sync interval to {value}s",
-        details={"inventory_sync_interval_seconds": value},
+        summary=(
+            f"Set the inventory sync interval to {value}s "
+            f"and the catalogue refresh to {hours}h"
+        ),
+        details={"inventory_sync_interval_seconds": value, "release_catalog_interval_hours": hours},
     )
     return RedirectResponse(url="/settings?tab=checks", status_code=status.HTTP_303_SEE_OTHER)
 

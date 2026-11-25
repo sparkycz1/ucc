@@ -18,6 +18,7 @@ from app.db.models.ai_model import AiModel
 from app.db.models.ai_provider import AiProviderConfig
 from app.db.models.app_settings import AppSettings, WebSearchKind
 from app.db.models.console import Console
+from app.db.models.device import Device
 from app.db.models.fabric import Fabric
 from app.db.models.release import LatestRelease, Release
 from app.db.models.user import User
@@ -177,6 +178,24 @@ async def ensure_releases(db: AsyncSession, targets: Iterable[UpdateTarget]) -> 
 # newest few versions on community.ui.com — rated like any other release, so
 # the Releases page answers "is the new Protect any good?" before a console
 # even offers it.
+
+
+async def model_names(db: AsyncSession) -> dict[str, str]:
+    """Model code → display name ("UDRULT" → "UCG-Ultra") from what is
+    synced, for showing a release's `product`. Instance-wide like releases
+    themselves: model names are public UniFi facts, not Fabric data."""
+    names: dict[str, str] = {}
+    for model_cls in (Console, Device):
+        rows = await db.execute(
+            select(model_cls.model, model_cls.model_name)
+            .where(model_cls.model.is_not(None), model_cls.model_name.is_not(None))
+            .distinct()
+        )
+        for code, name in rows.all():
+            if code and name:
+                names.setdefault(code, name)
+    return names
+
 
 CATALOG_VERSIONS = 3
 

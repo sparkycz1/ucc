@@ -135,6 +135,7 @@ async def apply_inventory(db: AsyncSession, fabric: Fabric, inventory: Inventory
                 console.devices.append(device)
             device.name = dev_info.name
             device.model = dev_info.model
+            device.model_name = dev_info.model_name
             device.product_line = dev_info.product_line
             device.is_online = dev_info.is_online
             device.version = dev_info.version
@@ -147,6 +148,13 @@ async def apply_inventory(db: AsyncSession, fabric: Fabric, inventory: Inventory
         wanted_macs = {d.mac for d in wanted_devices}
         console.devices[:] = [d for d in console.devices if d.mac in wanted_macs]
         device_count += len(console.devices)
+
+    # A console's display name: its own entry in the device list ("UCG
+    # Ultra"), else the long hardware name ("UniFi Cloud Gateway Ultra").
+    names = {d.model: d.model_name for d in inventory.devices if d.model and d.model_name}
+    long_names = {h.host_id: h.model_name for h in inventory.hosts}
+    for host_id, console in consoles.items():
+        console.model_name = names.get(console.model or "") or long_names.get(host_id)
 
     fabric.last_sync_at = now
     fabric.last_sync_error = None

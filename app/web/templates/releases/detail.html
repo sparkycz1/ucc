@@ -18,7 +18,7 @@
   </div>
 
   <p class="hint">
-    {{ t(request, "releases.kind." ~ release.kind) }} · {{ release.product }}
+    {{ t(request, "releases.kind." ~ release.kind) }} · <span title="{{ release.product }}">{{ model_names.get(release.product, release.product) }}</span>
     {% if release.stage %} · {{ release.stage }}{% endif %}
     {% if release.published_at %} · {{ t(request, "releases.published", when=(release.published_at | local_time('%Y-%m-%d'))) }}{% endif %}
     {% if release.community_url %} · <a href="{{ release.community_url }}" target="_blank" rel="noopener noreferrer">{{ t(request, "releases.notes") }}</a>{% endif %}
@@ -43,7 +43,7 @@
       <h3>{{ t(request, "releases.issues") }}</h3>
       <ul>
         {% for issue in release.issues %}
-          <li><strong>{{ issue.title }}</strong>{% if issue.detail %} — {{ issue.detail }}{% endif %}</li>
+          <li><strong>{{ issue.title }}</strong>{% if issue.reports %} <span class="badge" title="{{ t(request, 'releases.reports_hint') }}">{{ t(request, "releases.reports", count=issue.reports) }}</span>{% endif %}{% if issue.detail %} — {{ issue.detail }}{% endif %}</li>
         {% endfor %}
       </ul>
     {% endif %}

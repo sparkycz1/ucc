@@ -7,11 +7,20 @@
   <div class="page-header">
     <h1>{{ t(request, "nav.releases") }}</h1>
     <div class="page-header-actions">
+      {% if current_user.has_permission('release.manage') %}
+        <form method="post" action="/releases/refresh" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button">{{ t(request, "catalog.refresh") }}</button>
+        </form>
+      {% endif %}
       <a class="button button-secondary" href="/assessments">{{ t(request, "nav.assessments") }}</a>
     </div>
   </div>
 
   <p class="hint">{{ t(request, "catalog.intro", level=max_risk_level) }}</p>
+  {% if refreshing %}
+    <div class="alert alert-ok"><p>{{ t(request, "catalog.refreshing") }}</p></div>
+  {% endif %}
   {% if not assessment_configured %}
     <div class="alert alert-warn"><p>{{ t(request, "releases.not_configured") }}</p></div>
   {% endif %}

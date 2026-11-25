@@ -48,6 +48,10 @@ class Device(Base):
     # Short model code, e.g. "U6-Pro", "USW-24-PoE" — what release notes and
     # AI assessments are keyed on together with the version.
     model: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    # The name people know it by ("UCG-Ultra", "USW-Pro-Max-48-PoE") —
+    # Site Manager's `model`, while `model` above holds its `shortname`
+    # code ("UDRULT", "USPM48P"). Display only; NULL until the next sync.
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # network, protect, access, ...
     product_line: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

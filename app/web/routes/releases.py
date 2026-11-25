@@ -12,7 +12,7 @@
 - `fabric.view`: all of the above (only the pending updates in Fabrics the
   account may see are listed with a release), and any version's
   release-notes link.
-- `release.manage`: ask for a re-assessment, set or clear a manual risk
+- `release.manage`: refresh the catalogue now, ask for a re-assessment, set or clear a manual risk
   level (it replaces the AI's in every verdict).
 - `update.override`: allow a release whatever its risk level (every
   pending update to it becomes GO), or withdraw that.
@@ -48,13 +48,14 @@ from app.releases.service import (
     assessment_model,
     catalog,
     catalog_products,
+    model_names,
     product_label,
     visible_verdicts,
 )
 from app.releases.sources.community import SITE_URL, CommunityClient
 from app.releases.versions import normalize_version
 from app.services.access_scope import fabrics_visible_to
-from app.tasks.release_jobs import assess_release
+from app.tasks.release_jobs import assess_release, refresh_release_catalog
 from app.web.templating import templates
 
 router = APIRouter(
@@ -103,8 +104,25 @@ async def release_catalog(
             "installed": installed,
             "max_risk_level": app_settings.max_acceptable_risk_level,
             "assessment_configured": await assessment_model(db, app_settings) is not None,
+            "refreshing": request.query_params.get("refreshing") == "1",
+            "csrf_token": request.state.csrf_token,
         },
     )
+
+
+@router.post("/refresh", dependencies=[_manage, Depends(verify_csrf)])
+async def refresh_catalog_now(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    """Refresh the catalogue from community.ui.com now instead of waiting
+    for Beat (`release_catalog_interval_hours`); new versions are queued
+    for assessment by the task itself."""
+    refresh_release_catalog.delay()
+    await log_event(
+        db,
+        request=request,
+        action="release.catalog.refresh",
+        summary="Requested a refresh of the Releases catalogue",
+    )
+    return RedirectResponse(url="/releases?refreshing=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @assessments_router.get("")
@@ -147,6 +165,7 @@ async def list_assessments(
             "max_risk_level": app_settings.max_acceptable_risk_level,
             "assessment_configured": await assessment_model(db, app_settings) is not None,
             "unknown_count": sum(1 for _f, v in pending if v.target.target_version is None),
+            "model_names": await model_names(db),
         },
     )
 
@@ -230,6 +249,7 @@ async def show_release(
             "assessment_configured": await assessment_model(db, app_settings) is not None,
             "queued": request.query_params.get("queued") == "1",
             "risk_levels": list(range(MIN_RISK_LEVEL, MAX_RISK_LEVEL + 1)),
+            "model_names": await model_names(db),
         },
     )
 

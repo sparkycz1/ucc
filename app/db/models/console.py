@@ -30,7 +30,11 @@ class Console(Base):
     # Site Manager's host id — also the `{id}` of the connector proxy path.
     host_id: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Site Manager's model code (`hardware.shortname`, "UDRULT") — what
+    # releases are keyed on — and the name people know it by ("UCG-Ultra"),
+    # display only, NULL until the next sync.
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 

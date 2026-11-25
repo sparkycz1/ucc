@@ -8,6 +8,10 @@
         <input type="number" id="inventory_sync_interval_seconds" name="inventory_sync_interval_seconds"
                min="60" max="86400" step="1" value="{{ app_settings.inventory_sync_interval_seconds }}">
         <p class="hint">{{ t(request, "settings.checks.background_checks_hint") }}</p>
+        <label for="release_catalog_interval_hours">{{ t(request, "settings.checks.release_catalog_interval") }}</label>
+        <input type="number" id="release_catalog_interval_hours" name="release_catalog_interval_hours"
+               min="1" max="168" step="1" value="{{ app_settings.release_catalog_interval_hours }}">
+        <p class="hint">{{ t(request, "settings.checks.release_catalog_interval_hint") }}</p>
         <button type="submit" class="button">{{ t(request, "settings.checks.save_background_checks") }}</button>
       </form>
     </div>
