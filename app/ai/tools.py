@@ -218,7 +218,10 @@ reports, call read_release_reports and judge the reports yourself, saying \
 plainly that this is your own reading and not a stored rating. Weigh a \
 problem by how many independent people and sources report it: one post is \
 an anecdote, the same problem from several people or in several sources is \
-real — say which is which. Risk \
+real — say which is which. A rating is judged per console/device: \
+problems tagged for hardware a site doesn't have (doorbells on an NVR \
+without doorbells) lower its level there — say so, and still mention \
+them. Risk \
 levels: 1 stable, 2 minor issues, 3 caution, 4 high risk, 5 broken; above \
 the acceptable level ucc recommends STOP. You can't change a rating; a \
 person with release.manage can, on the release's page in ucc.

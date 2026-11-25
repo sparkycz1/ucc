@@ -29,9 +29,15 @@
     <section class="panel"><p class="hint">{{ t(request, "catalog.empty") }}</p></section>
   {% endif %}
 
-  {% for product, releases in catalog.items() %}
+  {% for group in catalog %}
+    {% if loop.first or loop.previtem.kind != group.kind %}
+      <h2 class="section-title">{{ t(request, "catalog.section." ~ group.kind) }}</h2>
+    {% endif %}
     <section class="panel">
-      <h2>{{ titles.get(product, product) }}</h2>
+      <h3>{{ group.title }}</h3>
+      {% if group.kind != 'app' %}
+        <p class="hint">{{ t(request, "catalog.models") }}: {% for product in group.products %}<span title="{{ product }}">{{ model_names.get(product, product) }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+      {% endif %}
       <table class="data-table">
         <thead>
           <tr>
@@ -41,11 +47,11 @@
             <th>{{ t(request, "releases.table.risk") }}</th>
             <th>{{ t(request, "releases.table.why") }}</th>
             <th>{{ t(request, "releases.sources") }}</th>
-            <th>{{ t(request, "catalog.yours") }}</th>
+            <th>{{ t(request, "catalog.yours" if group.kind == 'app' else "catalog.yours_devices") }}</th>
           </tr>
         </thead>
         <tbody>
-          {% for release in releases %}
+          {% for release in group.releases %}
             <tr>
               <td class="nowrap"><strong>{{ version_link(release.kind, release.product, release.version) }}</strong></td>
               <td>{{ release.stage or '—' }}</td>
@@ -57,7 +63,7 @@
               </td>
               <td>{{ release.short_reason or ('—' if release.effective_risk_level is not none else t(request, "releases.waiting")) }}</td>
               <td>{{ source_links(release) }}</td>
-              <td>{{ installed.get((release.product, release.version), 0) or '—' }}</td>
+              <td>{{ running.get(release.id, 0) or '—' }}</td>
             </tr>
           {% endfor %}
         </tbody>

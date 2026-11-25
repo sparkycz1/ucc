@@ -41,6 +41,7 @@ from app.db.models.notification_rule import NotificationEventType
 from app.services.live_updates import KIND_INVENTORY, publish_fabric_event
 from app.services.notifications import notify
 from app.tasks.celery_app import celery_app
+from app.tasks.job_runs import tracked
 from app.unifi.client import SiteManagerError
 from app.unifi.sync import sync_fabric as apply_fabric_sync
 
@@ -122,7 +123,7 @@ async def _sync_all_fabrics() -> None:
 
 @celery_app.task(name="app.tasks.jobs.sync_all_fabrics")
 def sync_all_fabrics() -> None:
-    asyncio.run(_sync_all_fabrics())
+    asyncio.run(tracked("sync-all-fabrics", _sync_all_fabrics()))
 
 
 _AUDIT_PURGE_ACTOR = "retention policy (automatic)"
@@ -174,7 +175,7 @@ async def _purge_old_audit_log_entries() -> None:
 
 @celery_app.task(name="app.tasks.jobs.purge_old_audit_log_entries")
 def purge_old_audit_log_entries() -> None:
-    asyncio.run(_purge_old_audit_log_entries())
+    asyncio.run(tracked("purge-old-audit-log-entries", _purge_old_audit_log_entries()))
 
 
 _NOTIFICATION_LOG_PURGE_ACTOR = "retention policy (automatic)"
@@ -220,4 +221,4 @@ async def _purge_old_notification_logs() -> None:
 
 @celery_app.task(name="app.tasks.jobs.purge_old_notification_logs")
 def purge_old_notification_logs() -> None:
-    asyncio.run(_purge_old_notification_logs())
+    asyncio.run(tracked("purge-old-notification-logs", _purge_old_notification_logs()))

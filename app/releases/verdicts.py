@@ -7,8 +7,10 @@ release on the same line on community.ui.com (`LatestRelease`), since
 UniFi rolls releases out gradually and a console can say "up to date" for
 days after a release is public.
 
-The verdict compares the release's risk level (manual if set, else the
-AI's) with the acceptable level: `Fabric.max_acceptable_risk_level` if the
+The verdict compares the release's risk level *for that console or device*
+(`app.releases.context`: manual if set, else the AI's, lowered when its
+problems are tagged for hardware the console doesn't have) with the
+acceptable level: `Fabric.max_acceptable_risk_level` if the
 Fabric overrides it, else `AppSettings.max_acceptable_risk_level`.
 """
 
@@ -25,6 +27,13 @@ from app.db.models.console import Console
 from app.db.models.device import Device
 from app.db.models.fabric import Fabric
 from app.db.models.release import LatestRelease, Release, ReleaseKind
+from app.releases.context import (
+    ContextualRisk,
+    Profile,
+    console_profile,
+    contextual_risk,
+    device_profile,
+)
 from app.releases.products import is_newer
 from app.releases.versions import normalize_version
 
@@ -41,6 +50,8 @@ class Verdict(enum.StrEnum):
 class TargetSource(enum.StrEnum):
     SITE_MANAGER = "site_manager"
     COMMUNITY = "community"
+    # Not an update: the version running now (`installed_targets`).
+    INSTALLED = "installed"
 
 
 @dataclass(frozen=True)
@@ -75,12 +86,23 @@ class UpdateTarget:
         return f"{name} — {(self.app_name or self.product).capitalize()}"
 
 
+    @property
+    def profile(self) -> Profile:
+        """What this update can touch: the device itself for firmware, the
+        console and everything on it for UniFi OS and applications."""
+        if self.device is not None:
+            return device_profile(self.device)
+        return console_profile(self.console)
+
+
 @dataclass(frozen=True)
 class TargetVerdict:
     target: UpdateTarget
     verdict: Verdict
     release: Release | None
     max_risk_level: int
+    # The release's level for this target (`app.releases.context`).
+    risk: ContextualRisk = ContextualRisk(None)
 
 
 def os_product(console: Console) -> str | None:
@@ -241,12 +263,16 @@ def max_risk_for(fabric: Fabric, global_level: int) -> int:
     return global_level
 
 
-def verdict_for(release: Release | None, max_risk_level: int) -> Verdict:
+def verdict_for(
+    release: Release | None, max_risk_level: int, level: int | None = None
+) -> Verdict:
+    """GO/STOP for `release` at `level` (default: its general level)."""
     if release is None:
         return Verdict.PENDING
     if release.is_allowed:
         return Verdict.GO
-    level = release.effective_risk_level
+    if level is None:
+        level = release.effective_risk_level
     if level is None:
         return Verdict.PENDING
     return Verdict.GO if level <= max_risk_level else Verdict.STOP
@@ -264,7 +290,84 @@ def verdicts(
             out.append(TargetVerdict(target, Verdict.UNKNOWN, None, max_risk_level))
             continue
         release = releases.get(key)
+        risk = ContextualRisk(None)
+        if release is not None:
+            risk = contextual_risk(release, target.profile)
         out.append(
-            TargetVerdict(target, verdict_for(release, max_risk_level), release, max_risk_level)
+            TargetVerdict(
+                target,
+                verdict_for(release, max_risk_level, risk.level),
+                release,
+                max_risk_level,
+                risk,
+            )
         )
+    return out
+
+
+def auto_update_applies(target: UpdateTarget) -> bool:
+    """UniFi's own auto-update on this console would install `target` on
+    its schedule, whatever ucc says: UniFi OS always, applications only
+    with "include applications". Device firmware isn't covered by it."""
+    console = target.console
+    if not console.auto_update_schedule or target.device is not None:
+        return False
+    if target.kind == ReleaseKind.OS:
+        return True
+    return target.kind == ReleaseKind.APP and bool(console.auto_update_include_apps)
+
+
+def is_console_entry(console: Console, device: Device) -> bool:
+    """Site Manager lists a console among its own devices too; that entry's
+    "firmware" is the console's UniFi OS, already its own target."""
+    return bool(device.model and console.model and device.model.strip() == console.model.strip())
+
+
+def installed_targets(consoles: Iterable[Console]) -> list[UpdateTarget]:
+    """What runs now, as targets keyed on the installed version — rated
+    like an update, so a version that turns out bad after it was installed
+    is flagged (`TargetSource.INSTALLED`)."""
+    out: list[UpdateTarget] = []
+    for console in consoles:
+        version = normalize_version(console.os_version)
+        product = os_product(console)
+        if product and version:
+            out.append(
+                UpdateTarget(
+                    ReleaseKind.OS.value,
+                    product,
+                    console.os_version,
+                    version,
+                    TargetSource.INSTALLED,
+                    console,
+                )
+            )
+        for app in console.apps:
+            version = normalize_version(app.version)
+            if version:
+                out.append(
+                    UpdateTarget(
+                        ReleaseKind.APP.value,
+                        app.name,
+                        app.version,
+                        version,
+                        TargetSource.INSTALLED,
+                        console,
+                        app_name=app.name,
+                    )
+                )
+        for device in console.devices:
+            version, product = normalize_version(device.version), device_product(device)
+            if product and version and not is_console_entry(console, device):
+                out.append(
+                    UpdateTarget(
+                        ReleaseKind.FIRMWARE.value,
+                        product,
+                        device.version,
+                        version,
+                        TargetSource.INSTALLED,
+                        console,
+                        device,
+                    )
+                )
     return out

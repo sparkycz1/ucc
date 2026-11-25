@@ -44,6 +44,7 @@
         <a href="/notifications" {% if current_path.startswith('/notifications') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.notifications") }}</a>
       {% endif %}
       {% if current_user.has_permission('settings.view') %}
+        <a href="/status" {% if current_path.startswith('/status') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.status") }}</a>
         <a href="/settings" {% if current_path.startswith('/settings') %}class="active" aria-current="page"{% endif %}>{{ t(request, "nav.settings") }}</a>
       {% endif %}
     </nav>

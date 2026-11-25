@@ -700,6 +700,9 @@ p { margin: 0 0 var(--space-3); }
 .risk-3 { background: rgba(224, 171, 74, 0.16); color: var(--color-warn); }
 .risk-4, .risk-5 { background: rgba(240, 104, 95, 0.16); color: var(--color-danger); }
 .risk-5 { font-weight: 700; }
+.section-title { margin: var(--space-6) 0 var(--space-3); }
+.issue-na { opacity: 0.7; }
+.risk-general { text-decoration: line-through; opacity: 0.7; }
 .nowrap { white-space: nowrap; }
 .source-links { display: inline-flex; flex-wrap: wrap; gap: 0.5rem; }
 .update-target { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }

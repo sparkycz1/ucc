@@ -1,4 +1,4 @@
-{% from "partials/_release.html" import version_link, update_cell with context %}
+{% from "partials/_release.html" import version_link, update_cell, installed_risk, risk_badge with context %}
 <p class="hint">
   {% if fabric.last_sync_error %}
     <span class="badge badge-error">{{ t(request, "fabrics.sync_failed") }}</span> {{ fabric.last_sync_error }}
@@ -32,7 +32,19 @@
       · {{ t(request, "fabrics.sites_count", count=(console.sites | length)) }}
     </p>
 
-    {% if console.auto_update_schedule %}
+    {% set auto_risks = auto_update_risks.get(console.id, []) %}
+    {% if auto_risks %}
+      <div class="alert alert-error">
+        <p>{{ t(request, "fabrics.auto_update.risk", schedule=console.auto_update_schedule) }}</p>
+        <p>
+          {% for verdict in auto_risks %}
+            <strong>{{ verdict.target.label }} → {{ verdict.target.target_version }}</strong>
+            {{ risk_badge(verdict.risk.level, verdict.release.short_reason if verdict.release else none) }}
+            {%- if verdict.release and verdict.release.short_reason %} {{ verdict.release.short_reason }}{% endif %}{% if not loop.last %}<br>{% endif %}
+          {% endfor %}
+        </p>
+      </div>
+    {% elif console.auto_update_schedule %}
       <div class="alert alert-warn">
         <p>
           {{ t(request, "fabrics.auto_update.warning_apps" if console.auto_update_include_apps else "fabrics.auto_update.warning", schedule=console.auto_update_schedule) }}
@@ -51,7 +63,7 @@
       <tbody>
         <tr>
           <td>UniFi OS</td>
-          <td>{{ version_link('os', console.model, console.os_version) }}</td>
+          <td>{{ version_link('os', console.model, console.os_version) }} {{ installed_risk(installed.get(('os', console.id))) }}</td>
           <td>{{ update_cell(verdicts.get(('os', console.id))) }}</td>
         </tr>
         {% if console.core_version %}
@@ -64,7 +76,7 @@
         {% for app in console.apps | sort(attribute='name') %}
         <tr>
           <td>{{ app.name | capitalize }}</td>
-          <td>{{ version_link('app', app.name, app.version) }}</td>
+          <td>{{ version_link('app', app.name, app.version) }} {{ installed_risk(installed.get(('app', console.id, app.name))) }}</td>
           <td>{{ update_cell(verdicts.get(('app', console.id, app.name))) }}</td>
         </tr>
         {% endfor %}
@@ -90,7 +102,7 @@
           <td>{{ device.name or device.mac }}</td>
           <td title="{{ device.model or '' }}">{{ device.model_name or device.model or '—' }}</td>
           <td>{{ (device.site.name or device.site.site_id) if device.site else '—' }}</td>
-          <td title="{{ device.version or '' }}">{{ version_link('firmware', device.model, device.version | normalize_version) }}</td>
+          <td title="{{ device.version or '' }}">{{ version_link('firmware', device.model, device.version | normalize_version) }} {{ installed_risk(installed.get(('device', device.id))) }}</td>
           <td>{{ update_cell(verdicts.get(('device', device.id))) }}</td>
           <td>
             {% if device.is_online %}<span class="badge badge-ok">{{ t(request, "fabrics.online") }}</span>

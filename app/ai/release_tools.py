@@ -17,6 +17,8 @@ prompt already treats tool output as data.
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +62,12 @@ def resolve_product(text: str) -> tuple[str | None, str]:
         if key in lowered.split() or f"unifi {key}" in lowered:
             return ReleaseKind.APP.value, key
     return None, text.strip()
+
+
+async def _visible_fabric_ids(db: AsyncSession, user: User) -> list[uuid.UUID]:
+    from app.services.access_scope import fabrics_visible_to
+
+    return [f.id for f in (await db.execute(await fabrics_visible_to(db, user))).scalars()]
 
 
 def _compact(text: str) -> str:
@@ -110,8 +118,8 @@ async def list_release_ratings(db: AsyncSession, user: User, product: str | None
         if verdict.release is not None:
             releases[str(verdict.release.id)] = verdict.release
             pending.setdefault(str(verdict.release.id), []).append(verdict.verdict.value)
-    for rows in (await catalog(db)).values():
-        for release in rows:
+    for group in await catalog(db, await _visible_fabric_ids(db, user)):
+        for release in group.releases:
             releases.setdefault(str(release.id), release)
 
     selected = list(releases.values())
@@ -170,13 +178,27 @@ async def get_release_rating(db: AsyncSession, user: User, product: str, version
             "judgement is your own reading, not a stored ucc rating."
         )
     affected: dict[str, list[str]] = {}
-    for fabric, verdict in await visible_verdicts(db, user):
-        if verdict.release is not None:
-            affected.setdefault(str(verdict.release.id), []).append(
+    for fabric, verdict in await visible_verdicts(db, user, installed=True):
+        if verdict.release is None:
+            continue
+        risk = verdict.risk
+        context = f", risk here {risk.level}/5" if risk.level is not None else ""
+        if risk.not_applicable:
+            context += " (not applicable here: " + "; ".join(
+                str(i.get("title")) for i in risk.not_applicable
+            ) + ")"
+        if verdict.target.source == "installed":
+            line = (
+                f"{fabric.name}: {verdict.target.label} runs it now"
+                f"{' — ABOVE the acceptable level' if verdict.verdict == 'stop' else ''}{context}"
+            )
+        else:
+            line = (
                 f"{fabric.name}: {verdict.target.label} "
                 f"({normalize_version(verdict.target.current_version) or '?'} → "
-                f"{verdict.release.version}) {verdict.verdict.value.upper()}"
+                f"{verdict.release.version}) {verdict.verdict.value.upper()}{context}"
             )
+        affected.setdefault(str(verdict.release.id), []).append(line)
     out = []
     for release in found:
         lines = [
@@ -192,10 +214,19 @@ async def get_release_rating(db: AsyncSession, user: User, product: str, version
             lines.append(f"Allowed by hand by {release.allowed_by}: {release.allowed_note or ''}")
         if release.summary:
             lines.append(f"Summary: {release.summary}")
+        if release.base_risk_level is not None and release.base_risk_level != release.risk_level:
+            lines.append(
+                f"Without the hardware-specific issues: risk {release.base_risk_level}/5 "
+                "(each console/device below is judged by what it has)"
+            )
         for issue in release.issues or []:
             if isinstance(issue, dict) and issue.get("title"):
                 reports = issue.get("reports")
                 count = f" [{reports} independent reports]" if isinstance(reports, int) else ""
+                if isinstance(issue.get("severity"), int):
+                    count += f" [severity {issue['severity']}/5]"
+                if issue.get("affects"):
+                    count += f" [affects: {', '.join(map(str, issue['affects']))}]"
                 lines.append(
                     f"- issue: {issue['title']}{count} {issue.get('detail') or ''}".rstrip()
                 )
@@ -212,12 +243,12 @@ async def get_release_rating(db: AsyncSession, user: User, product: str, version
             lines.append(f"- release notes: {release.community_url}")
         targets = affected.get(str(release.id), [])
         if targets:
-            lines.append(f"Pending in your Fabrics ({len(targets)}):")
+            lines.append(f"In your Fabrics — pending updates and what runs it ({len(targets)}):")
             lines.extend(f"  {t}" for t in targets[:MAX_AFFECTED])
             if len(targets) > MAX_AFFECTED:
                 lines.append(f"  (and {len(targets) - MAX_AFFECTED} more)")
         else:
-            lines.append("Not pending on any console or device in your Fabrics.")
+            lines.append("Not pending on, or running on, any console or device in your Fabrics.")
         out.append("\n".join(lines))
     return "\n\n".join(out)
 
