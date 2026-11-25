@@ -28,7 +28,7 @@
       {% else %}<span class="badge badge-error">{{ t(request, "fabrics.offline") }}</span>{% endif %}
     </h2>
     <p class="hint">
-      {{ console.model or '—' }}{% if console.ip_address %} · {{ console.ip_address }}{% endif %}
+      <span title="{{ console.model or '' }}">{{ console.model_name or console.model or '—' }}</span>{% if console.ip_address %} · {{ console.ip_address }}{% endif %}
       · {{ t(request, "fabrics.sites_count", count=(console.sites | length)) }}
     </p>
 
@@ -88,7 +88,7 @@
         {% for device in console.devices %}
         <tr>
           <td>{{ device.name or device.mac }}</td>
-          <td>{{ device.model or '—' }}</td>
+          <td title="{{ device.model or '' }}">{{ device.model_name or device.model or '—' }}</td>
           <td>{{ (device.site.name or device.site.site_id) if device.site else '—' }}</td>
           <td title="{{ device.version or '' }}">{{ version_link('firmware', device.model, device.version | normalize_version) }}</td>
           <td>{{ update_cell(verdicts.get(('device', device.id))) }}</td>

@@ -121,6 +121,13 @@ class AppSettings(Base):
     inventory_sync_interval_seconds: Mapped[int] = mapped_column(
         Integer, default=900, nullable=False
     )
+    # How often (hours) Beat refreshes the Releases catalogue from
+    # community.ui.com (app.tasks.release_jobs.refresh_release_catalog).
+    # Same "read at Beat start" contract; Beat also refreshes once right
+    # after it starts, and the Releases page has a button for it.
+    release_catalog_interval_hours: Mapped[int] = mapped_column(
+        Integer, default=24, server_default="24", nullable=False
+    )
 
     # --- AI assistant token limits (app.ai.usage) ---
     #

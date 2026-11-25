@@ -228,3 +228,60 @@ async def test_apply_inventory_creates_then_updates_then_prunes(db_session_facto
         device = consoles[0].devices[0]
         assert device.id == device_id  # updated in place, not recreated
         assert device.version == "6.7.10"
+
+
+def test_model_display_names_come_from_site_manager():
+    from app.unifi.client import display_model
+
+    assert display_model("UCG Ultra") == "UCG-Ultra"
+    assert display_model("USW  Pro Max 48 PoE") == "USW-Pro-Max-48-PoE"
+    assert display_model("") is None and display_model(None) is None
+    host = parse_host(
+        {"id": "h", "reportedState": {"hardware": {"shortname": "UDRULT",
+                                                    "name": "UniFi Cloud Gateway Ultra"}}}
+    )  # fmt: skip
+    assert host.model == "UDRULT" and host.model_name == "UniFi Cloud Gateway Ultra"
+    devices = parse_devices(
+        {"hostId": "h", "devices": [
+            {"mac": "aa:00", "shortname": "UDRULT", "model": "UCG Ultra", "isConsole": True},
+            {"mac": "aa:01", "model": "U7 Pro"},
+        ]}
+    )  # fmt: skip
+    assert (devices[0].model, devices[0].model_name) == ("UDRULT", "UCG-Ultra")
+    # No shortname: `model` already holds the only name there is.
+    assert (devices[1].model, devices[1].model_name) == ("U7 Pro", None)
+
+
+async def test_sync_names_the_console_after_its_own_device_entry(db_session_factory):
+    async with db_session_factory() as db_session:
+        await _names_case(db_session)
+
+
+async def _names_case(db_session: Any) -> None:
+    fabric = Fabric(name="Names", api_key_encrypted=encrypt_secret("k"))
+    db_session.add(fabric)
+    await db_session.flush()
+    hosts = [
+        HostInfo(host_id="h1", name="A", model="UDRULT", ip_address=None, is_online=True,
+                 os_version="4.3.6", os_update_available=None,
+                 model_name="UniFi Cloud Gateway Ultra"),
+        HostInfo(host_id="h2", name="B", model="UDMPRO", ip_address=None, is_online=True,
+                 os_version="4.3.6", os_update_available=None,
+                 model_name="UniFi Dream Machine Pro"),
+    ]  # fmt: skip
+    devices = [
+        DeviceInfo(host_id="h1", mac="aa:00", name="gw", model="UDRULT", product_line="network",
+                   is_online=True, version="4.3.6", update_available=None, is_console=True,
+                   model_name="UCG-Ultra"),
+    ]  # fmt: skip
+    await apply_inventory(db_session, fabric, Inventory(hosts=hosts, sites=[], devices=devices))
+    await db_session.flush()
+    consoles = {
+        c.host_id: c
+        for c in (
+            await db_session.execute(select(Console).where(Console.fabric_id == fabric.id))
+        ).scalars()
+    }
+    assert consoles["h1"].model_name == "UCG-Ultra"
+    # No device entry for it: the long hardware name.
+    assert consoles["h2"].model_name == "UniFi Dream Machine Pro"

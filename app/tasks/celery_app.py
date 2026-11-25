@@ -62,7 +62,7 @@ from typing import Any
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_process_init
+from celery.signals import beat_init, worker_process_init
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -74,17 +74,18 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 configure_logging(settings.log_level)
 
-# Built-in fallback for the four interval settings below — used only if the
+# Built-in fallback for the interval settings below — used only if the
 # database isn't reachable yet at process start (e.g. the very first boot,
 # before `alembic upgrade head` has run against a brand new Postgres).
 # Matches `AppSettings`'s own column defaults (app/db/models/app_settings.py).
 _INTERVAL_SETTING_DEFAULTS: dict[str, int] = {
     "inventory_sync_interval_seconds": 900,
+    "release_catalog_interval_hours": 24,
 }
 
 
 def _bootstrap_interval_settings() -> dict[str, int]:
-    """One-time, synchronous-from-the-caller's-perspective read of the three
+    """One-time, synchronous-from-the-caller's-perspective read of the
     Beat-schedule intervals from `AppSettings`, for the `beat_schedule`
     dict literal below — a Celery schedule has to be a plain value computed
     once at import time, not something re-read from the database on every
@@ -94,7 +95,7 @@ def _bootstrap_interval_settings() -> dict[str, int]:
 
     This module is imported identically by the web app, every Celery
     worker, and Celery Beat (see `app.tasks.jobs`'s import of `celery_app`)
-    — but only Beat's own schedule actually depends on these three values,
+    — but only Beat's own schedule actually depends on these values,
     so only the `celery ... beat` process pays for the database round trip
     this needs; every other import (the web app, a worker, `alembic`, the
     test suite collecting `app.main`) gets the built-in defaults
@@ -145,6 +146,7 @@ def _bootstrap_interval_settings() -> dict[str, int]:
             exc_info=True,
         )
         return dict(_INTERVAL_SETTING_DEFAULTS)
+
 
 celery_app = Celery(
     "ucc",
@@ -219,9 +221,9 @@ celery_app.conf.update(
 # one-off read happens and what it falls back to if the database isn't
 # reachable yet.
 #
-# Beat has no persisted "last run" on a fresh start, so each entry fires once
-# shortly after startup on its own — which is exactly the behaviour the old
-# queue needed a hand-written "kick off the first sweep" hook to get.
+# A `timedelta` entry first fires one full interval after Beat starts (Celery
+# takes "now" as its last run), not right away — anything that must happen
+# at startup is sent by `_on_beat_start` below.
 _interval_settings = _bootstrap_interval_settings()
 celery_app.conf.beat_schedule = {
     "sync-all-fabrics": {
@@ -248,17 +250,30 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=5, minute=10),
     },
     # The Releases page's catalogue: every UniFi application's newest
-    # versions from community.ui.com (app.tasks.release_jobs). Fires once
-    # shortly after Beat starts, like every timedelta entry.
+    # versions from community.ui.com (app.tasks.release_jobs), every
+    # `release_catalog_interval_hours` (default 24) — plus once at Beat's
+    # start (`_on_beat_start`) and on the page's Refresh button.
     "refresh-release-catalog": {
         "task": "app.tasks.release_jobs.refresh_release_catalog",
-        "schedule": timedelta(hours=6),
+        "schedule": timedelta(hours=_interval_settings["release_catalog_interval_hours"]),
     },
     "purge-old-notification-logs": {
         "task": "app.tasks.jobs.purge_old_notification_logs",
         "schedule": crontab(hour=3, minute=25),
     },
 }
+
+
+@beat_init.connect
+def _on_beat_start(sender: Any = None, **kwargs: Any) -> None:
+    """Refresh the Releases catalogue as soon as Beat starts: its schedule
+    entry would otherwise first fire a whole interval (a day) later, leaving
+    a fresh install's Releases page empty until then. Cheap — one
+    community.ui.com search per application."""
+    try:
+        celery_app.send_task("app.tasks.release_jobs.refresh_release_catalog")
+    except Exception:  # noqa: BLE001 — never keep Beat from starting
+        logger.warning("Could not enqueue the startup catalogue refresh", exc_info=True)
 
 
 @worker_process_init.connect

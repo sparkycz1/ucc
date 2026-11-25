@@ -1026,3 +1026,108 @@ async def test_assistant_release_tools(
             db, user, ToolCall(id="5", name="read_release_reports", arguments={"product": "x"})
         )
         assert "required" in bad
+
+
+# --- 0.2.3: catalogue refresh, model names, report weighting -----------------------
+
+
+async def test_catalog_refresh_button(
+    client: Any, db_session_factory: Any, login_as: Any, celery_calls: Any
+) -> None:
+    page = await client.get("/releases")
+    assert 'action="/releases/refresh"' in page.text
+    csrf = client.cookies.get("csrftoken")
+    response = await client.post("/releases/refresh", data={"csrf_token": csrf})
+    assert response.status_code == 303 and response.headers["location"] == "/releases?refreshing=1"
+    assert "app.tasks.release_jobs.refresh_release_catalog" in celery_calls.names
+    assert (await client.post("/releases/refresh", data={"csrf_token": "x"})).status_code == 403
+    async with db_session_factory() as db:
+        actions = {e.action for e in (await db.execute(select(AuditLogEntry))).scalars()}
+        assert "release.catalog.refresh" in actions
+
+    await login_as(client, permissions={Permission.FABRIC_VIEW}, username="viewer")
+    assert 'action="/releases/refresh"' not in (await client.get("/releases")).text
+    csrf = client.cookies.get("csrftoken")
+    assert (await client.post("/releases/refresh", data={"csrf_token": csrf})).status_code == 403
+
+
+def test_catalog_interval_comes_from_settings_and_beat_start_refreshes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks import celery_app as module
+
+    entry = module.celery_app.conf.beat_schedule["refresh-release-catalog"]
+    assert entry["schedule"] == timedelta(hours=24)
+    sent: list[str] = []
+    monkeypatch.setattr(module.celery_app, "send_task", lambda name, **_: sent.append(name))
+    module._on_beat_start()
+    assert sent == ["app.tasks.release_jobs.refresh_release_catalog"]
+
+
+async def test_catalog_interval_setting_is_validated(client: Any, db_session_factory: Any) -> None:
+    page = await client.get("/settings?tab=checks")
+    assert 'name="release_catalog_interval_hours"' in page.text and 'value="24"' in page.text
+    csrf = client.cookies.get("csrftoken")
+    response = await client.post(
+        "/settings/background-checks",
+        data={"inventory_sync_interval_seconds": "900", "release_catalog_interval_hours": "12",
+              "csrf_token": csrf},
+    )  # fmt: skip
+    assert response.status_code == 303
+    bad = await client.post(
+        "/settings/background-checks",
+        data={"inventory_sync_interval_seconds": "900", "release_catalog_interval_hours": "0",
+              "csrf_token": csrf},
+    )  # fmt: skip
+    assert bad.status_code == 200 and "between 1 and 168" in bad.text
+    # A form without the field (pre-0.2.3) keeps the stored value.
+    await client.post(
+        "/settings/background-checks",
+        data={"inventory_sync_interval_seconds": "600", "csrf_token": csrf},
+    )
+    async with db_session_factory() as db:
+        app_settings = await get_or_create_app_settings(db)
+        assert app_settings.release_catalog_interval_hours == 12
+        assert app_settings.inventory_sync_interval_seconds == 600
+
+
+async def test_model_names_show_instead_of_codes(
+    client: Any, db_session_factory: Any, accept_any_api_key: Any
+) -> None:
+    from app.ai.release_tools import _model_code
+    from app.releases.service import model_names
+    from tests.conftest import create_fabric_via_web
+
+    fabric_id = await create_fabric_via_web(client, "Office")
+    async with db_session_factory() as db:
+        console = _console()
+        console.fabric_id = fabric_id
+        console.model, console.model_name = "UDRULT", "UCG-Ultra"
+        console.devices[0].model_name = "G5-Flex"
+        db.add(console)
+        release = Release(kind="os", product="UDRULT", version="4.4.6", risk_level=1)
+        db.add(release)
+        await db.commit()
+        assert (await model_names(db))["UDRULT"] == "UCG-Ultra"
+        assert await _model_code(db, "ucg ultra") == "UDRULT"
+        assert await _model_code(db, "Something else") == "Something else"
+    page = await client.get(f"/fabrics/{fabric_id}")
+    assert "UCG-Ultra" in page.text and "G5-Flex" in page.text
+    detail = await client.get(f"/releases/{release.id}")
+    assert 'title="UDRULT">UCG-Ultra<' in detail.text
+
+
+def test_prompt_weighs_independent_reports_and_issues_carry_counts() -> None:
+    assert "independent reports" in assess_module.SYSTEM_PROMPT
+    assert "anecdote" in assess_module.SYSTEM_PROMPT
+    result = parse_answer(
+        json.dumps({"risk_level": 3, "reason": "r", "summary": "s",
+                    "issues": [{"title": "STP", "detail": "loops", "reports": 5},
+                               {"title": "LED", "detail": "one user"}]})
+    )  # fmt: skip
+    assert [i.reports for i in result.issues] == [5, None]
+    with pytest.raises(AssessmentError):
+        parse_answer(
+            json.dumps({"risk_level": 3, "summary": "s",
+                        "issues": [{"title": "STP", "reports": True}]})
+        )  # fmt: skip

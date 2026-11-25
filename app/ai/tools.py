@@ -215,7 +215,10 @@ to update: call get_release_rating (or list_release_ratings) and answer \
 from ucc's rating — the level, the reason, the main problems, and the \
 source links. If ucc has no rating, or the operator wants the latest \
 reports, call read_release_reports and judge the reports yourself, saying \
-plainly that this is your own reading and not a stored rating. Risk \
+plainly that this is your own reading and not a stored rating. Weigh a \
+problem by how many independent people and sources report it: one post is \
+an anecdote, the same problem from several people or in several sources is \
+real — say which is which. Risk \
 levels: 1 stable, 2 minor issues, 3 caution, 4 high risk, 5 broken; above \
 the acceptable level ucc recommends STOP. You can't change a rating; a \
 person with release.manage can, on the release's page in ucc.
@@ -312,7 +315,8 @@ async def _devices_summary(
         status = "online" if device.is_online else "offline"
         lines.append(
             f"- [{fab_name} / {console_name}] {device.name or device.mac} "
-            f"model={device.model} fw={device.version}{update} {status}"
+            f"model={device.model_name or device.model} ({device.model}) "
+            f"fw={device.version}{update} {status}"
         )
     if len(rows) > MAX_LISTED_DEVICES:
         lines.append(f"(listing cut at {MAX_LISTED_DEVICES} devices — narrow by Fabric)")

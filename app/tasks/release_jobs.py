@@ -14,7 +14,8 @@ a one-line `asyncio.run(...)` wrapper, sessions come from
 - `reassess_releases()` — daily Beat sweep: early ratings are made on
   little feedback, so a release with pending updates (or in the Releases
   catalogue) is re-rated once a day for its first 30 days.
-- `refresh_release_catalog()` — Beat, every 6 hours: the newest three
+- `refresh_release_catalog()` — Beat (daily by default, at Beat start,
+  and the Releases page's Refresh button): the newest three
   versions of every UniFi application from community.ui.com, for the
   Releases page, each new one enqueued for assessment.
 
@@ -305,7 +306,8 @@ def reassess_releases() -> None:
 
 
 async def _refresh_release_catalog() -> dict[str, Any]:
-    """Beat, every 6 hours: the newest versions of every UniFi application
+    """Beat (every `release_catalog_interval_hours`), Beat start, or the
+    Refresh button: the newest versions of every UniFi application
     from community.ui.com (the Releases page), each never-rated one
     enqueued for assessment when a model is configured."""
     async with db_session.AsyncSessionLocal() as session:

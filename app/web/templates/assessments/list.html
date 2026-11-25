@@ -44,7 +44,7 @@
         <tr>
           <td>
             <a href="/releases/{{ release.id }}">{{ release.title or t(request, "releases.kind." ~ release.kind) }}</a>
-            <span class="hint">{{ release.product }}</span>
+            <span class="hint" title="{{ release.product }}">{{ model_names.get(release.product, release.product) }}</span>
           </td>
           <td class="nowrap">
             {% for installed in current_versions.get(release.id, []) %}{{ version_link(release.kind, release.product, installed) }}{% if not loop.last %}, {% endif %}{% endfor %}

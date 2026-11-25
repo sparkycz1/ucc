@@ -52,6 +52,10 @@ class HostInfo:
     auto_update_include_apps: bool | None = None
     # (app name, version, update available) — installed applications only.
     apps: list[tuple[str, str | None, str | None]] = field(default_factory=list)
+    # `hardware.name` ("UniFi Cloud Gateway Ultra") — only a fallback for
+    # the console's display name; its own entry in `/v1/devices` gives the
+    # short one ("UCG Ultra").
+    model_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +81,9 @@ class DeviceInfo:
     # because it can say an update exists while `update_available` is empty
     # (seen on offline devices).
     firmware_status: str | None = None
+    # The display name (`model`, "UCG Ultra" → "UCG-Ultra") when `model`
+    # above is the `shortname` code ("UDRULT").
+    model_name: str | None = None
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -118,6 +125,7 @@ def parse_host(raw: dict[str, Any]) -> HostInfo:
         host_id=str(raw["id"]),
         name=_str(state.get("name") or state.get("hostname")),
         model=_str(hardware.get("shortname") or hardware.get("name")),
+        model_name=_str(hardware.get("name")) if hardware.get("shortname") else None,
         ip_address=_str(raw.get("ipAddress") or state.get("ip")),
         is_online=str(state.get("state", "")).lower() == "connected",
         # `hardware.firmwareVersion` is the UniFi OS version that updates:
@@ -154,6 +162,14 @@ def _auto_update_schedule(auto_update: Any) -> str | None:
     return ", ".join(parts)
 
 
+def display_model(name: str | None) -> str | None:
+    """Site Manager's model name the way UniFi writes its SKUs:
+    "UCG Ultra" → "UCG-Ultra", "USW Pro Max 48 PoE" → "USW-Pro-Max-48-PoE"."""
+    if not name:
+        return None
+    return "-".join(name.split())[:100] or None
+
+
 def parse_site(raw: dict[str, Any]) -> SiteInfo:
     meta = _dict(raw.get("meta"))
     return SiteInfo(
@@ -183,6 +199,9 @@ def parse_devices(raw: dict[str, Any]) -> list[DeviceInfo]:
                 update_available=_str(dev.get("updateAvailable")),
                 is_console=bool(dev.get("isConsole")),
                 firmware_status=_str(dev.get("firmwareStatus")),
+                model_name=(
+                    display_model(_str(dev.get("model"))) if dev.get("shortname") else None
+                ),
             )
         )
     return result
