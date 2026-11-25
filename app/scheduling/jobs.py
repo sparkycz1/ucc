@@ -33,6 +33,7 @@ from app.scheduling.builtin_actions import register_builtin_actions
 from app.scheduling.cron import compute_next_run
 from app.scheduling.targets import resolve_target
 from app.tasks.celery_app import celery_app
+from app.tasks.job_runs import tracked
 
 # `actor` for every audit entry this module writes — there's no HTTP
 # request (and so no IP) behind a schedule firing on its own; this label is
@@ -85,7 +86,7 @@ async def _run_due_scheduled_tasks() -> None:
 
 @celery_app.task(name="app.scheduling.jobs.run_due_scheduled_tasks")
 def run_due_scheduled_tasks() -> None:
-    asyncio.run(_run_due_scheduled_tasks())
+    asyncio.run(tracked("run-due-scheduled-tasks", _run_due_scheduled_tasks()))
 
 
 async def _run_scheduled_task(task_id: str) -> dict[str, Any]:

@@ -38,7 +38,10 @@ from app.db.models.user import User
 from app.db.session import get_db
 from app.releases.verdicts import (
     TargetVerdict,
+    Verdict,
+    auto_update_applies,
     installed_keys,
+    installed_targets,
     load_latest,
     load_releases,
     max_risk_for,
@@ -236,22 +239,34 @@ async def _inventory_context(db: AsyncSession, fabric: Fabric) -> dict[str, obje
     max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
     latest = await load_latest(db, installed_keys(consoles))
     targets = update_targets(consoles, latest)
+    running = installed_targets(consoles)
+    releases = await load_releases(db, [*targets, *running])
     by_key: dict[tuple[object, ...], TargetVerdict] = {}
-    for verdict in verdicts(targets, await load_releases(db, targets), max_level):
-        target = verdict.target
-        if target.device is not None:
-            by_key[("device", target.device.id)] = verdict
-        elif target.kind == ReleaseKind.OS:
-            by_key[("os", target.console.id)] = verdict
-        else:
-            by_key[("app", target.console.id, target.app_name)] = verdict
+    # UniFi's own auto-update would install these STOP updates anyway.
+    auto_update_risks: dict[object, list[TargetVerdict]] = {}
+    for verdict in verdicts(targets, releases, max_level):
+        by_key[_row_key(verdict)] = verdict
+        if verdict.verdict == Verdict.STOP and auto_update_applies(verdict.target):
+            auto_update_risks.setdefault(verdict.target.console.id, []).append(verdict)
+    installed_by_key = {_row_key(v): v for v in verdicts(running, releases, max_level)}
     return {
         "fabric": fabric,
         "consoles": consoles,
         "verdicts": by_key,
+        "installed": installed_by_key,
+        "auto_update_risks": auto_update_risks,
         "max_risk_level": max_level,
         "fabric_overrides_risk": fabric.max_acceptable_risk_level is not None,
     }
+
+
+def _row_key(verdict: TargetVerdict) -> tuple[object, ...]:
+    target = verdict.target
+    if target.device is not None:
+        return ("device", target.device.id)
+    if target.kind == ReleaseKind.OS:
+        return ("os", target.console.id)
+    return ("app", target.console.id, target.app_name)
 
 
 async def _load_inventory(db: AsyncSession, fabric: Fabric) -> list[Console]:

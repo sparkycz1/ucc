@@ -32,6 +32,7 @@ from app.web.routes import (
     releases,
     roles,
     scheduling,
+    status,
     theme,
     users,
 )
@@ -164,6 +165,7 @@ def create_app() -> FastAPI:
     app.include_router(roles.router)
     app.include_router(notifications.router)
     app.include_router(settings_routes.router)
+    app.include_router(status.router)
     app.include_router(theme.router)
     # No HTTP dependency here — WebSocket connections never go through
     # `app.auth.middleware`, so this router does its own auth inside the

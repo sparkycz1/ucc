@@ -6,8 +6,11 @@ row."""
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +23,7 @@ from app.db.models.app_settings import AppSettings, WebSearchKind
 from app.db.models.console import Console
 from app.db.models.device import Device
 from app.db.models.fabric import Fabric
-from app.db.models.release import LatestRelease, Release
+from app.db.models.release import LatestRelease, Release, ReleaseKind
 from app.db.models.user import User
 from app.releases.evidence import Evidence, SourceError
 from app.releases.products import APP_TITLES, search_term, version_key
@@ -31,6 +34,7 @@ from app.releases.verdicts import (
     TargetVerdict,
     UpdateTarget,
     installed_keys,
+    installed_targets,
     load_latest,
     load_releases,
     max_risk_for,
@@ -205,12 +209,92 @@ def catalog_products() -> list[tuple[str, str]]:
     return list(APP_TITLES.items())
 
 
+async def _upsert_post(db: AsyncSession, kind: str, product: str, post: Any) -> Release:
+    release = (
+        await db.execute(
+            select(Release).where(
+                Release.kind == kind, Release.product == product, Release.version == post.version
+            )
+        )
+    ).scalar_one_or_none()
+    if release is None:
+        release = Release(kind=kind, product=product, version=post.version)
+        db.add(release)
+    release.title = post.title
+    release.community_release_id = post.id
+    release.community_url = post.url
+    release.stage = post.stage
+    if release.published_at is None:
+        release.published_at = parse_time(post.created_at)
+    return release
+
+
+async def installed_products(
+    db: AsyncSession, fabric_ids: Iterable[uuid.UUID] | None = None
+) -> set[tuple[str, str]]:
+    """(kind, model) of every console (UniFi OS) and device (firmware) in
+    `fabric_ids`, or in every enabled Fabric."""
+    if fabric_ids is None:
+        scope = Console.fabric_id.in_(select(Fabric.id).where(Fabric.is_enabled.is_(True)))
+    else:
+        scope = Console.fabric_id.in_(list(fabric_ids))
+    out: set[tuple[str, str]] = set()
+    for (model,) in (
+        await db.execute(select(Console.model).where(scope, Console.model.is_not(None)).distinct())
+    ).all():
+        if model and model.strip():
+            out.add((ReleaseKind.OS.value, model.strip()))
+    for (model,) in (
+        await db.execute(
+            select(Device.model)
+            .join(Console, Device.console_id == Console.id)
+            # Not the console's own entry: its firmware is its UniFi OS.
+            .where(scope, Device.model.is_not(None), Device.model != Console.model)
+            .distinct()
+        )
+    ).all():
+        if model and model.strip():
+            out.add((ReleaseKind.FIRMWARE.value, model.strip()))
+    return out
+
+
+async def _line_titles(
+    db: AsyncSession, products: set[tuple[str, str]]
+) -> dict[tuple[str, str], list[str]]:
+    """(kind, community title) → the installed models on that release line,
+    from the `LatestRelease` lookups every sync already makes (a firmware
+    line is the title of the installed version's post, so this costs
+    community.ui.com nothing extra)."""
+    if not products:
+        return {}
+    rows = (
+        await db.execute(
+            select(LatestRelease)
+            .where(
+                LatestRelease.kind.in_([ReleaseKind.OS.value, ReleaseKind.FIRMWARE.value]),
+                LatestRelease.title.is_not(None),
+            )
+            .order_by(LatestRelease.checked_at)
+        )
+    ).scalars()
+    title_of: dict[tuple[str, str], str] = {}
+    for row in rows:
+        if (row.kind, row.product) in products and row.title:
+            title_of[(row.kind, row.product)] = row.title  # the newest lookup wins
+    lines: dict[tuple[str, str], list[str]] = {}
+    for (kind, product), title in sorted(title_of.items()):
+        lines.setdefault((kind, title), []).append(product)
+    return lines
+
+
 async def refresh_catalog(db: AsyncSession) -> list[Release]:
-    """Read each application's newest release posts from community.ui.com
-    and upsert them as `Release` rows (kind=app). Does not commit. Returns
-    the catalogue's current rows (newest `CATALOG_VERSIONS` per
-    application). A community.ui.com failure stops the refresh, leaving the
-    existing rows as they are."""
+    """Read the newest release posts from community.ui.com and upsert them
+    as `Release` rows: every application (kind=app), and the UniFi OS and
+    firmware lines of every console and device in an enabled Fabric (one
+    row per installed model, so verdicts find them). Does not commit.
+    Returns the catalogue's current rows. A community.ui.com failure stops
+    the refresh, leaving the existing rows as they are."""
+    lines = await _line_titles(db, await installed_products(db))
     community = CommunityClient()
     try:
         for product, title in catalog_products():
@@ -218,60 +302,127 @@ async def refresh_catalog(db: AsyncSession) -> list[Release]:
                 items = await community.search(title, 30)
             except SourceError as exc:
                 logger.info("Release catalog refresh failed at %s: %s", product, exc)
-                break
+                return await _catalog_rows(db)
             posts = sorted(
                 matching_posts("app", product, items),
                 key=lambda p: version_key(p.version) or (),
                 reverse=True,
             )[:CATALOG_VERSIONS]
             for post in posts:
-                release = (
-                    await db.execute(
-                        select(Release).where(
-                            Release.kind == "app",
-                            Release.product == product,
-                            Release.version == post.version,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if release is None:
-                    release = Release(kind="app", product=product, version=post.version)
-                    db.add(release)
-                release.title = post.title
-                release.community_release_id = post.id
-                release.community_url = post.url
-                release.stage = post.stage
-                if release.published_at is None:
-                    release.published_at = parse_time(post.created_at)
+                await _upsert_post(db, ReleaseKind.APP.value, product, post)
+        for (kind, title), products in lines.items():
+            try:
+                items = await community.search(title, 30)
+            except SourceError as exc:
+                logger.info("Release catalog refresh failed at %s: %s", title, exc)
+                break
+            posts = sorted(
+                [p for p in matching_posts(kind, products[0], items) if p.title == title],
+                key=lambda p: version_key(p.version) or (),
+                reverse=True,
+            )[:CATALOG_VERSIONS]
+            for product in products:
+                for post in posts:
+                    await _upsert_post(db, kind, product, post)
     finally:
         await community.aclose()
+    return await _catalog_rows(db)
+
+
+async def _catalog_rows(db: AsyncSession) -> list[Release]:
     await db.flush()
-    return [r for rows in (await catalog(db)).values() for r in rows]
+    return [r for group in await catalog(db) for r in group.all_rows]
 
 
-async def catalog(db: AsyncSession) -> dict[str, list[Release]]:
-    """Application key → its newest `CATALOG_VERSIONS` releases with a
-    community.ui.com post, newest first, in `catalog_products` order."""
-    products = [product for product, _title in catalog_products()]
-    rows = (
+@dataclass
+class CatalogGroup:
+    """One section of the Releases page: an application, or a UniFi OS /
+    firmware release line with the installed models on it."""
+
+    kind: str
+    title: str
+    # Application key, or the models on the line.
+    products: list[str]
+    # Newest first, one per version (the line's models share the post, so
+    # they share the rating — `app.tasks.release_jobs` copies it).
+    releases: list[Release]
+    # Every row behind `releases` (one per model) — what gets rated.
+    all_rows: list[Release] = field(default_factory=list)
+
+
+def _newest(rows: Iterable[Release]) -> list[Release]:
+    by_version: dict[str, Release] = {}
+    for row in rows:
+        current = by_version.get(row.version)
+        # The rated (and most recently rated) row stands for its version.
+        if current is None or (row.assessed_at or datetime.min.replace(tzinfo=UTC)) > (
+            current.assessed_at or datetime.min.replace(tzinfo=UTC)
+        ):
+            by_version[row.version] = row
+    return sorted(
+        by_version.values(), key=lambda r: version_key(r.version) or (), reverse=True
+    )[:CATALOG_VERSIONS]
+
+
+async def catalog(
+    db: AsyncSession, fabric_ids: Iterable[uuid.UUID] | None = None
+) -> list[CatalogGroup]:
+    """The Releases page: every application's newest `CATALOG_VERSIONS`
+    releases with a community.ui.com post (in `catalog_products` order),
+    then the UniFi OS and firmware lines of what is installed in
+    `fabric_ids` (default: every enabled Fabric) — a scoped viewer sees
+    only the lines of hardware in Fabrics they may see."""
+    groups: list[CatalogGroup] = []
+    app_keys = [product for product, _title in catalog_products()]
+    app_rows = (
         await db.execute(
             select(Release).where(
-                Release.kind == "app",
-                Release.product.in_(products),
+                Release.kind == ReleaseKind.APP.value,
+                Release.product.in_(app_keys),
                 Release.community_release_id.is_not(None),
             )
         )
     ).scalars()
-    by_product: dict[str, list[Release]] = {product: [] for product in products}
-    for release in rows:
-        by_product[release.product].append(release)
-    return {
-        product: sorted(
-            releases, key=lambda r: version_key(r.version) or (), reverse=True
-        )[:CATALOG_VERSIONS]
-        for product, releases in by_product.items()
-        if releases
-    }
+    by_app: dict[str, list[Release]] = {product: [] for product in app_keys}
+    for release in app_rows:
+        by_app[release.product].append(release)
+    for product, title in catalog_products():
+        rows = _newest(by_app[product])
+        if rows:
+            groups.append(CatalogGroup(ReleaseKind.APP.value, title, [product], rows, rows))
+
+    lines = await _line_titles(db, await installed_products(db, fabric_ids))
+    if lines:
+        line_rows = (
+            await db.execute(
+                select(Release).where(
+                    Release.kind.in_([ReleaseKind.OS.value, ReleaseKind.FIRMWARE.value]),
+                    Release.title.in_([title for _kind, title in lines]),
+                    Release.community_release_id.is_not(None),
+                )
+            )
+        ).scalars()
+        by_line: dict[tuple[str, str], list[Release]] = {key: [] for key in lines}
+        for release in line_rows:
+            key = (release.kind, release.title or "")
+            if key in by_line and release.product in lines[key]:
+                by_line[key].append(release)
+        for kind in (ReleaseKind.OS.value, ReleaseKind.FIRMWARE.value):
+            for (line_kind, title), products in sorted(lines.items()):
+                if line_kind != kind or not by_line[(line_kind, title)]:
+                    continue
+                newest = _newest(by_line[(line_kind, title)])
+                versions = {r.version for r in newest}
+                groups.append(
+                    CatalogGroup(
+                        kind,
+                        title,
+                        products,
+                        newest,
+                        [r for r in by_line[(line_kind, title)] if r.version in versions],
+                    )
+                )
+    return groups
 
 
 def parse_time(value: str | None) -> datetime | None:
@@ -293,6 +444,9 @@ def claim_unrated(releases: Iterable[Release], *, now: datetime | None = None) -
     now = now or datetime.now(UTC)
     claimed = []
     seen: set[str] = set()
+    # Models on one firmware/OS line share a community post: one assessment
+    # per post, copied to the rest when it lands (`share_rating`).
+    posts: set[tuple[str, str]] = set()
     for release in releases:
         if str(release.id) in seen:
             continue
@@ -303,17 +457,62 @@ def claim_unrated(releases: Iterable[Release], *, now: datetime | None = None) -
         if queued is not None and _aware(queued) > now - REQUEUE_AFTER:
             continue
         release.assessment_queued_at = now
+        post = (release.kind, release.community_release_id or "")
+        if release.community_release_id and post in posts:
+            continue
+        posts.add(post)
         claimed.append(str(release.id))
     return claimed
+
+
+RATING_FIELDS = (
+    "risk_level",
+    "base_risk_level",
+    "reason",
+    "summary",
+    "issues",
+    "sources",
+    "assessed_at",
+    "assessed_by_model",
+    "assessment_error",
+)
+
+
+async def share_rating(db: AsyncSession, release: Release) -> list[Release]:
+    """Copy `release`'s fresh AI rating to the other models' rows for the
+    same community post (a switch firmware is one post for every switch
+    on the line). Human decisions stay per row. Does not commit; returns
+    the rows updated."""
+    if not release.community_release_id or release.assessed_at is None:
+        return []
+    siblings = list(
+        (
+            await db.execute(
+                select(Release).where(
+                    Release.kind == release.kind,
+                    Release.community_release_id == release.community_release_id,
+                    Release.id != release.id,
+                )
+            )
+        ).scalars()
+    )
+    for sibling in siblings:
+        for name in RATING_FIELDS:
+            setattr(sibling, name, getattr(release, name))
+        sibling.assessment_queued_at = None
+    return siblings
 
 
 REQUEUE_AFTER = timedelta(hours=1)
 
 
-async def visible_verdicts(db: AsyncSession, user: User) -> list[tuple[Fabric, TargetVerdict]]:
+async def visible_verdicts(
+    db: AsyncSession, user: User, *, installed: bool = False
+) -> list[tuple[Fabric, TargetVerdict]]:
     """Every pending update in the Fabrics `user` may see
     (`app.services.access_scope`), with its verdict — shared by the
-    Releases/Assessments pages and the AI assistant's tools."""
+    Releases/Assessments pages and the AI assistant's tools. `installed`
+    adds what runs now (`TargetSource.INSTALLED`), judged the same way."""
     from app.core.app_settings import get_or_create_app_settings
     from app.services.access_scope import fabrics_visible_to
 
@@ -336,6 +535,8 @@ async def visible_verdicts(db: AsyncSession, user: User) -> list[tuple[Fabric, T
         consoles = list(fabric.consoles)
         latest = await load_latest(db, installed_keys(consoles))
         targets = update_targets(consoles, latest)
+        if installed:
+            targets += installed_targets(consoles)
         releases = await load_releases(db, targets)
         max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
         out.extend((fabric, v) for v in verdicts(targets, releases, max_level))

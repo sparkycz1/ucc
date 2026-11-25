@@ -8,6 +8,7 @@ from app.db.models.audit_log import AuditChainState, AuditLogEntry, AuditOutcome
 from app.db.models.console import Console, ConsoleApp
 from app.db.models.device import Device
 from app.db.models.fabric import Fabric
+from app.db.models.job_run import JobRun
 from app.db.models.notification_log import (
     NotificationDeliveryChannel,
     NotificationDeliveryStatus,
@@ -19,7 +20,13 @@ from app.db.models.notification_rule import (
     NotificationRule,
     NotificationTemplate,
 )
-from app.db.models.release import LatestRelease, Release, ReleaseKind
+from app.db.models.release import (
+    LatestRelease,
+    RatingSource,
+    Release,
+    ReleaseKind,
+    ReleaseRating,
+)
 from app.db.models.role import Permission, Role, RolePermission
 from app.db.models.saved_audit_view import SavedAuditView
 from app.db.models.scheduled_task import ScheduledTask, ScheduleTargetType
@@ -49,6 +56,7 @@ __all__ = [
     "ConsoleApp",
     "Device",
     "Fabric",
+    "JobRun",
     "NotificationCustomTemplate",
     "NotificationDeliveryChannel",
     "NotificationDeliveryStatus",
@@ -57,10 +65,12 @@ __all__ = [
     "NotificationRule",
     "NotificationTemplate",
     "PendingActionStatus",
+    "RatingSource",
     "Permission",
     "LatestRelease",
     "Release",
     "ReleaseKind",
+    "ReleaseRating",
     "Role",
     "RolePermission",
     "SavedAuditView",

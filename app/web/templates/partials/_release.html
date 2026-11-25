@@ -31,6 +31,23 @@
   {%- endif -%}
 {%- endmacro %}
 
+{# A release's level for one console/device (`app.releases.context`): the
+   badge, and — when problems it has are tagged for hardware this one
+   doesn't have — the general level struck through, with those problems
+   in the tooltip and a note, so nobody is surprised by them later. #}
+{% macro context_risk(verdict) -%}
+  {%- set risk = verdict.risk -%}
+  {%- set release = verdict.release -%}
+  <a href="/releases/{{ release.id }}">{{ risk_badge(risk.level, release.short_reason) }}</a>
+  {%- if risk.not_applicable %}
+    {%- set titles = risk.not_applicable | map(attribute='title') | join('; ') %}
+    {%- if risk.lowered %}
+      <span class="badge risk-general" title="{{ t(request, 'releases.context.general_hint', level=risk.general) }}">{{ t(request, "releases.risk_short", level=risk.general) }}</span>
+    {%- endif %}
+    <span class="hint" title="{{ titles }}">{{ t(request, "releases.context.not_applicable", count=(risk.not_applicable | length)) }}</span>
+  {%- endif %}
+{%- endmacro %}
+
 {# The "Update to" cell: the target version (linked to its notes), where
    it came from, and the verdict with the release's risk level. #}
 {% macro update_cell(verdict) -%}
@@ -47,7 +64,7 @@
       {%- endif %}
       {{ verdict_badge(verdict) }}
       {%- if verdict.release is not none and verdict.release.effective_risk_level is not none %}
-        <a href="/releases/{{ verdict.release.id }}">{{ risk_badge(verdict.release.effective_risk_level, verdict.release.short_reason) }}</a>
+        {{ context_risk(verdict) }}
         {%- if verdict.release.short_reason and verdict.verdict == 'stop' %}
         <span class="hint">{{ verdict.release.short_reason }}</span>
         {%- endif %}
@@ -76,5 +93,14 @@
     {%- endfor %}
     {%- if sources | length > limit %} <a href="/releases/{{ release.id }}">+{{ (sources | length) - limit }}</a>{% endif %}
     </span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# The version running now, when its own rating is above the acceptable
+   level for this hardware — "this version is risky, see why". #}
+{% macro installed_risk(verdict) -%}
+  {%- if verdict is not none and verdict.release is not none and verdict.verdict == 'stop' %}
+    <span class="badge badge-error" title="{{ t(request, 'fabrics.installed_risk_hint', max=verdict.max_risk_level) }}">{{ t(request, "fabrics.installed_risk") }}</span>
+    {{ context_risk(verdict) }}
   {%- endif -%}
 {%- endmacro %}

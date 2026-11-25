@@ -93,6 +93,25 @@ _DEFAULT_TEMPLATES: dict[str, dict[NotificationEventType, tuple[str, str]]] = {
             "{max_risk_level}/5. Someone with the update.override permission can allow "
             "it manually in ucc.\n\n{details}",
         ),
+        NotificationEventType.RELEASE_RISK_CHANGED: (
+            "ucc: {product} {version} is now risk {risk_level}/5 (was {previous_risk_level}/5)",
+            "A re-assessment at {timestamp} changed the risk level of {product} {version} "
+            "from {previous_risk_level}/5 to {risk_level}/5.\n\n{details}",
+        ),
+        NotificationEventType.INSTALLED_AT_RISK: (
+            "ucc: {product} {version} running in {fabric_name} is now risk {risk_level}/5",
+            "{product} {version}, which {count} console(s)/device(s) in {fabric_name} run "
+            "now, was rated {risk_level}/5 at {timestamp} — above the acceptable level "
+            "{max_risk_level}/5 for that hardware: {target_name}. Check whether a newer "
+            "version is GO, or whether the problems affect you.\n\n{details}",
+        ),
+        NotificationEventType.AUTO_UPDATE_RISK: (
+            "ucc: UniFi auto-update would install {version} on {target_name}",
+            "{target_name} ({fabric_name}) has UniFi's own auto-update on ({schedule}) and "
+            "would install {version}, rated {risk_level}/5 at {timestamp} — above the "
+            "acceptable level {max_risk_level}/5. ucc can't stop it: turn the auto-update "
+            "off in UniFi or accept the risk.\n\n{details}",
+        ),
         NotificationEventType.UPDATE_RUN_FAILED: (
             "ucc: update of {target_name} failed",
             "The update of {target_name} ({fabric_name}) to {version} failed at "
@@ -121,6 +140,26 @@ _DEFAULT_TEMPLATES: dict[str, dict[NotificationEventType, tuple[str, str]]] = {
             "zastavena: úroveň rizika {risk_level}/5 je nad přijatelnou úrovní "
             "{max_risk_level}/5. Uživatel s oprávněním update.override ji může v ucc "
             "ručně povolit.\n\n{details}",
+        ),
+        NotificationEventType.RELEASE_RISK_CHANGED: (
+            "ucc: {product} {version} má nově riziko {risk_level}/5 "
+            "(dříve {previous_risk_level}/5)",
+            "Přehodnocení v {timestamp} změnilo úroveň rizika {product} {version} "
+            "z {previous_risk_level}/5 na {risk_level}/5.\n\n{details}",
+        ),
+        NotificationEventType.INSTALLED_AT_RISK: (
+            "ucc: {product} {version} běžící ve {fabric_name} má nově riziko {risk_level}/5",
+            "{product} {version}, které teď běží na {count} konzolích/zařízeních ve "
+            "{fabric_name}, bylo v {timestamp} ohodnoceno {risk_level}/5 — nad přijatelnou "
+            "úrovní {max_risk_level}/5 pro tento hardware: {target_name}. Zkontrolujte, jestli "
+            "je novější verze GO, nebo jestli se vás problémy týkají.\n\n{details}",
+        ),
+        NotificationEventType.AUTO_UPDATE_RISK: (
+            "ucc: automatická aktualizace UniFi by nainstalovala {version} na {target_name}",
+            "{target_name} ({fabric_name}) má zapnutou vlastní automatickou aktualizaci UniFi "
+            "({schedule}) a nainstalovala by {version}, ohodnocené v {timestamp} na "
+            "{risk_level}/5 — nad přijatelnou úrovní {max_risk_level}/5. ucc ji nezastaví: "
+            "vypněte automatickou aktualizaci v UniFi, nebo riziko přijměte.\n\n{details}",
         ),
         NotificationEventType.UPDATE_RUN_FAILED: (
             "ucc: aktualizace {target_name} selhala",
@@ -191,7 +230,11 @@ def render_template(
     code, e.g. "update.blocked"), `{timestamp}` (UTC ISO-8601).
     Fabric-scoped events additionally provide `{fabric_name}`; update and
     release events provide `{target_name}`, `{product}`, `{version}`,
-    `{risk_level}` and `{max_risk_level}` where they apply. `{details}` is
+    `{risk_level}` and `{max_risk_level}` where they apply;
+    `release.risk_changed` adds `{previous_risk_level}`,
+    `release.installed_at_risk` `{count}` (consoles/devices running it) and
+    `update.auto_update_risk` `{schedule}` (UniFi's auto-update schedule).
+    `{details}` is
     free-form, event-specific text passed via `notify`'s `context`."""
     if template is not None:
         subject_tpl, body_tpl = template.subject, template.body

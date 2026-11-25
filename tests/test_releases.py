@@ -535,17 +535,26 @@ async def test_discover_creates_releases_and_queues_each_assessment_once(
     first = await _fabric_with_inventory(jobs_db)
     second = await _fabric_with_inventory(jobs_db)
 
-    assert (await release_jobs._discover_releases(str(first)))["created"] == 2
+    # Two pending updates and five installed versions (USW-24 reports none).
+    assert (await release_jobs._discover_releases(str(first)))["created"] == 7
     assert (await release_jobs._discover_releases(str(second)))["created"] == 0
 
     async with jobs_db() as db:
         rows = {
             (r.kind, r.product, r.version) for r in (await db.execute(select(Release))).scalars()
         }
-        assert rows == {("app", "protect", "7.3.74"), ("firmware", "G5 Flex", "5.5.51")}
+        assert rows == {
+            ("app", "protect", "7.3.74"),
+            ("firmware", "G5 Flex", "5.5.51"),
+            ("os", "UDM-Pro", "4.1.13"),
+            ("app", "network", "10.6.111"),
+            ("app", "protect", "7.3.70"),
+            ("firmware", "G5 Flex", "5.5.45"),
+            ("firmware", "U6-Pro", "6.7.31"),
+        }
         assert (await db.execute(select(LatestRelease))).scalars().first() is not None
-    # Two releases, queued once even though two Fabrics discovered them.
-    assert celery_calls.names.count("app.tasks.release_jobs.assess_release") == 2
+    # Queued once each, even though two Fabrics discovered them.
+    assert celery_calls.names.count("app.tasks.release_jobs.assess_release") == 7
     # Lookups are cached: the second Fabric (same models/versions) did none.
     assert len(no_community) == len(set(no_community))
 
@@ -620,10 +629,12 @@ async def test_assess_stores_the_rating_records_usage_and_notifies_stop(
 
     async with jobs_db() as db:
         release = (
-            await db.execute(select(Release).where(Release.product == "protect"))
+            await db.execute(
+                select(Release).where(Release.product == "protect", Release.version == "7.3.74")
+            )
         ).scalar_one()
     result = await release_jobs._assess_release(str(release.id))
-    assert result == {"ok": True, "risk_level": 4}
+    assert result == {"ok": True, "risk_level": 4, "shared_with": 0}
 
     async with jobs_db() as db:
         stored = await db.get(Release, release.id)
@@ -684,7 +695,8 @@ async def test_reassess_picks_young_stale_pending_releases(
                 release.manual_risk_level = 1
         await db.commit()
     celery_calls.clear()
-    assert await release_jobs._reassess_releases(now) == 1
+    # Seven pending or installed, both Protect ones rated by hand.
+    assert await release_jobs._reassess_releases(now) == 5
 
 
 # --- web --------------------------------------------------------------------------
@@ -897,7 +909,8 @@ async def test_catalog_refresh_keeps_the_newest_three_and_queues_them(
     result = await release_jobs._refresh_release_catalog()
     assert result == {"ok": True, "catalog": 3, "queued": 3}
     async with jobs_db() as db:
-        rows = (await service.catalog(db))["protect"]
+        groups = {g.products[0]: g for g in await service.catalog(db)}
+        rows = groups["protect"].releases
         assert [r.version for r in rows] == ["7.3.74", "7.3.70", "7.3.61"]
         assert rows[0].community_url == "https://community.ui.com/releases/s/p74"
     assert celery_calls.names.count("app.tasks.release_jobs.assess_release") == 3

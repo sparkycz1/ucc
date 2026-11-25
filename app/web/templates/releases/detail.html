@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "partials/_release.html" import version_link, risk_badge, verdict_badge with context %}
+{% from "partials/_release.html" import version_link, risk_badge, verdict_badge, context_risk with context %}
 
 {% block title %}{{ label }} {{ release.version }} — ucc{% endblock %}
 
@@ -38,12 +38,19 @@
     {% if release.risk_level is not none %}
       <p><strong>{{ t(request, "releases.risk." ~ release.risk_level) }}{% if release.short_reason %}: {{ release.short_reason }}{% endif %}</strong></p>
     {% endif %}
+    {% if release.base_risk_level is not none and release.risk_level is not none and release.base_risk_level < release.risk_level and release.manual_risk_level is none %}
+      <p class="hint">{{ t(request, "releases.context.base", base=release.base_risk_level, level=release.risk_level) }}</p>
+    {% endif %}
     {% if release.summary %}<p>{{ release.summary }}</p>{% endif %}
     {% if release.issues %}
       <h3>{{ t(request, "releases.issues") }}</h3>
       <ul>
         {% for issue in release.issues %}
-          <li><strong>{{ issue.title }}</strong>{% if issue.reports %} <span class="badge" title="{{ t(request, 'releases.reports_hint') }}">{{ t(request, "releases.reports", count=issue.reports) }}</span>{% endif %}{% if issue.detail %} — {{ issue.detail }}{% endif %}</li>
+          <li><strong>{{ issue.title }}</strong>
+            {%- if issue.severity %} {{ risk_badge(issue.severity) }}{% endif %}
+            {%- if issue.reports %} <span class="badge" title="{{ t(request, 'releases.reports_hint') }}">{{ t(request, "releases.reports", count=issue.reports) }}</span>{% endif %}
+            {%- if issue.affects %} <span class="badge badge-tag" title="{{ t(request, 'releases.affects_hint') }}">{{ t(request, "releases.affects") }}: {% for tag in issue.affects %}{{ t(request, "releases.category." ~ tag) if tag in categories else tag }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+            {%- if issue.detail %} — {{ issue.detail }}{% endif %}</li>
         {% endfor %}
       </ul>
     {% endif %}
@@ -130,13 +137,67 @@
             <td><a href="/fabrics/{{ fabric.id }}">{{ fabric.name }}</a></td>
             <td>{{ verdict.target.label }}</td>
             <td class="nowrap">{{ version_link(release.kind, release.product, verdict.target.current_version | normalize_version) }} → {{ release.version }}</td>
-            <td>{{ verdict_badge(verdict) }} <span class="hint">{{ t(request, "releases.max_level", level=verdict.max_risk_level) }}</span></td>
+            <td>{{ verdict_badge(verdict) }} {% if verdict.release %}{{ context_risk(verdict) }}{% endif %} <span class="hint">{{ t(request, "releases.max_level", level=verdict.max_risk_level) }}</span></td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
     {% else %}
       <p class="hint">{{ t(request, "releases.affected_none") }}</p>
+    {% endif %}
+  </section>
+
+  {% if running %}
+  <section class="panel">
+    <h2>{{ t(request, "releases.running", count=(running | length)) }}</h2>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "nav.fabrics") }}</th>
+          <th>{{ t(request, "fabrics.table.device") }}</th>
+          <th>{{ t(request, "releases.table.risk") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for fabric, verdict in running %}
+          <tr>
+            <td><a href="/fabrics/{{ fabric.id }}">{{ fabric.name }}</a></td>
+            <td>{{ verdict.target.label }}</td>
+            <td>{{ context_risk(verdict) }}{% if verdict.verdict == 'stop' %} <span class="badge badge-error">{{ t(request, "fabrics.installed_risk") }}</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>{{ t(request, "releases.history") }}</h2>
+    {% if history %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "releases.history.when") }}</th>
+          <th>{{ t(request, "releases.history.what") }}</th>
+          <th>{{ t(request, "releases.table.risk") }}</th>
+          <th>{{ t(request, "releases.table.why") }}</th>
+          <th>{{ t(request, "releases.history.who") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in history %}
+          <tr>
+            <td class="nowrap">{{ entry.created_at | local_time('%Y-%m-%d %H:%M') }}</td>
+            <td>{{ t(request, "releases.history.source." ~ entry.source) }}</td>
+            <td class="nowrap">{{ risk_badge(entry.effective_risk_level) }}</td>
+            <td>{{ entry.reason or '—' }}</td>
+            <td>{{ entry.actor or '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="hint">{{ t(request, "releases.history.empty") }}</p>
     {% endif %}
   </section>
 {% endblock %}

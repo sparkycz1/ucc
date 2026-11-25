@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% from "partials/_release.html" import risk_badge with context %}
+
+{% block title %}{{ t(request, "nav.status") }} — ucc{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>{{ t(request, "nav.status") }}</h1>
+  </div>
+  <p class="hint">{{ t(request, "status.intro") }}</p>
+
+  <section class="panel">
+    <h2>{{ t(request, "status.worker") }}
+      {% if workers is none %}<span class="badge badge-error">{{ t(request, "status.broker_down") }}</span>
+      {% elif workers == 0 %}<span class="badge badge-error">{{ t(request, "status.no_worker") }}</span>
+      {% else %}<span class="badge badge-ok">{{ t(request, "status.workers_online", count=workers) }}</span>{% endif %}
+    </h2>
+  </section>
+
+  <section class="panel">
+    <h2>{{ t(request, "status.jobs") }}</h2>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "status.job") }}</th>
+          <th>{{ t(request, "status.last_run") }}</th>
+          <th>{{ t(request, "status.result") }}</th>
+          <th>{{ t(request, "status.last_error") }}</th>
+          <th>{{ t(request, "status.next_run") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+          <tr>
+            <td><strong>{{ t(request, "status.job." ~ job.name) }}</strong><br><span class="hint"><code>{{ job.name }}</code></span></td>
+            <td class="nowrap">{{ job.started | local_time('%Y-%m-%d %H:%M') if job.started else t(request, "status.never") }}</td>
+            <td>
+              {% if job.running %}<span class="badge">{{ t(request, "status.running") }}</span>
+              {% elif job.run is none %}—
+              {% elif job.run.last_ok %}<span class="badge badge-ok">{{ t(request, "status.ok") }}</span>
+              {% else %}<span class="badge badge-error">{{ t(request, "status.failed") }}</span>{% endif %}
+              {% if job.run and job.run.last_result %}<span class="hint">{{ job.run.last_result }}</span>{% endif %}
+            </td>
+            <td>
+              {% if job.run and job.run.last_error %}
+                <span class="nowrap">{{ job.error_at | local_time('%Y-%m-%d %H:%M') }}</span><br><span class="hint">{{ job.run.last_error }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="nowrap">{{ job.next | local_time('%Y-%m-%d %H:%M') if job.next else '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="hint">{{ t(request, "status.jobs_hint") }}</p>
+  </section>
+
+  <section class="panel">
+    <h2>{{ t(request, "status.syncs") }}</h2>
+    {% if fabrics %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "nav.fabrics") }}</th>
+          <th>{{ t(request, "status.last_sync") }}</th>
+          <th>{{ t(request, "status.result") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for fabric in fabrics %}
+          <tr>
+            <td><a href="/fabrics/{{ fabric.id }}">{{ fabric.name }}</a>{% if not fabric.is_enabled %} <span class="badge">{{ t(request, "status.disabled") }}</span>{% endif %}</td>
+            <td class="nowrap">{{ fabric.last_sync_at | local_time('%Y-%m-%d %H:%M') if fabric.last_sync_at else t(request, "status.never") }}</td>
+            <td>{% if fabric.last_sync_error %}<span class="badge badge-error">{{ t(request, "status.failed") }}</span> <span class="hint">{{ fabric.last_sync_error }}</span>{% elif fabric.last_sync_at %}<span class="badge badge-ok">{{ t(request, "status.ok") }}</span>{% else %}—{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="hint">{{ t(request, "status.no_fabrics") }}</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>{{ t(request, "status.assessments") }}</h2>
+    <p>
+      {{ t(request, "status.queued", count=queued) }} ·
+      {{ t(request, "status.failed_count", count=failed_count) }} ·
+      {{ t(request, "status.last_assessed", when=(last_assessed | local_time('%Y-%m-%d %H:%M') if last_assessed else t(request, "status.never"))) }}
+    </p>
+    {% if failed %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ t(request, "status.release") }}</th>
+          <th>{{ t(request, "status.error") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for release in failed %}
+          <tr>
+            <td class="nowrap"><a href="/releases/{{ release.id }}">{{ release.title or release.product }} {{ release.version }}</a> {{ risk_badge(release.effective_risk_level) }}</td>
+            <td class="hint">{{ release.assessment_error }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+{% endblock %}

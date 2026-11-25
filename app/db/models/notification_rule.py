@@ -58,6 +58,14 @@ class NotificationEventType(enum.StrEnum):
     # risk level is above the acceptable level — someone with
     # `update.override` can allow it by hand.
     UPDATE_BLOCKED = "update.blocked"
+    # A release's level changed on a re-assessment (2 → 4).
+    RELEASE_RISK_CHANGED = "release.risk_changed"
+    # The version a console or device runs *now* turned out above the
+    # acceptable level (for that hardware) after it was installed.
+    INSTALLED_AT_RISK = "release.installed_at_risk"
+    # A STOP update that UniFi's own auto-update would install anyway on
+    # its schedule — ucc can't stop it, a person has to.
+    AUTO_UPDATE_RISK = "update.auto_update_risk"
     UPDATE_RUN_SUCCEEDED = "update.succeeded"
     UPDATE_RUN_FAILED = "update.failed"
 

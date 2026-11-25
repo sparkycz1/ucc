@@ -57,11 +57,12 @@
 | | |
 |---|---|
 | 🧵 **Fabrics** | Add a UniFi Site Manager API key and ucc mirrors every console behind it: UniFi OS, Network/Protect/… versions, sites, and every device's firmware — with the version each can update to, even before the console offers it (the newest public release on community.ui.com). Every version links to its release notes. Synced every 15 minutes, on demand, or on a cron schedule. |
-| 📦 **Releases** | The newest three versions of every UniFi application (Network, Protect, Access, Talk, Connect, InnerSpace, Drive) from community.ui.com, each rated with a short reason and source links — before your consoles even offer them. |
+| 📦 **Releases** | The newest three versions of every UniFi application (Network, Protect, Access, Talk, Connect, InnerSpace, Drive), and of the UniFi OS and firmware lines your hardware runs, from community.ui.com — each rated with a short reason, source links and a rating history, before your consoles even offer them. |
 | 🧠 **AI-rated releases** | Each pending version is read up on community.ui.com (release notes, comments, forum questions), Reddit and the web, and rated 1 (stable) … 5 (broken) by the AI provider you choose, with the problems found and links to the posts. Re-rated daily while a release is young. |
-| 🚦 **GO / STOP** | Every pending update is GO when its rating is within the level you accept (globally or per Fabric), STOP above it — with a notification. A person can set the level by hand or allow a release anyway, all audit-logged. ucc only recommends: Site Manager has no API to start an update. |
+| 🚦 **GO / STOP** | Every pending update is GO when its rating is within the level you accept (globally or per Fabric), STOP above it — with a notification. Judged by what each console actually has: a doorbell bug doesn't stop an NVR without doorbells (you still see it, as "doesn't apply here"). A version you already run that turns bad, or a STOP update UniFi's own auto-update would install anyway, is flagged and notified. A person can set the level by hand or allow a release anyway, all audit-logged. ucc only recommends: Site Manager has no API to start an update. |
 | ⏱️ **Scheduling** | Cron any action against a site, a Fabric or every Fabric, with run history. |
-| 🔔 **Notifications** | Email or webhook on a failed sync, a finished assessment, or an update turning STOP — per Fabric, per role. |
+| 🔔 **Notifications** | Email or webhook on a failed sync, a finished assessment, a changed rating, an update turning STOP, a running version turning risky, or a risky UniFi auto-update — per Fabric, per role. |
+| 🩺 **Status** | Every background job's last run, result, failure and next run, whether a worker answers, each Fabric's last sync and the assessment queue — at a glance. |
 | 🧠 **AI assistant** | Ask about your inventory and releases in plain language — "is Protect 7.3.74 safe, what's broken?" — answered from ucc's ratings, or from the community reports read live. Read-only, scoped to the Fabrics you may see. |
 | 📝 **Audit log** | Every change, hash-chained, exportable, forwardable to your SIEM. |
 

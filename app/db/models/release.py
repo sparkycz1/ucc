@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -67,10 +67,14 @@ class Release(Base):
 
     # --- The AI assessment (overwritten on every re-assessment) ---
     risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The level for a setup none of the hardware-specific issues hit
+    # (`app.releases.context`); NULL = the same for everyone.
+    base_risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # A few words on why — "STP broken, cameras flicker" — for lists.
     reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # [{"title": ..., "detail": ...}] — the concrete problems found.
+    # [{"title", "detail", "reports", "severity", "affects": [...]}] — the
+    # concrete problems found (older ratings have only title and detail).
     issues: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     # [{"kind": "community"|"reddit"|"web", "title": ..., "url": ...}] —
     # what the assessment was based on, shown as links.
@@ -151,3 +155,35 @@ class LatestRelease(Base):
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     checked_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class RatingSource(enum.StrEnum):
+    AI = "ai"
+    MANUAL = "manual"
+    MANUAL_CLEARED = "manual_cleared"
+    ALLOWED = "allowed"
+    ALLOW_REVOKED = "allow_revoked"
+
+
+class ReleaseRating(Base):
+    """One entry in a release's rating history: every AI (re-)assessment
+    and every human decision on top of it, oldest first on the release's
+    page — "2 a week ago, 4 since people started reporting STP loops"."""
+
+    __tablename__ = "release_ratings"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    release_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("releases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The level this entry set (NULL for a cleared manual level / revoked
+    # allowance), and the general level in effect right after it.
+    risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    effective_risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # The model ("anthropic/claude-...") or the person's username.
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), nullable=False, index=True
+    )
