@@ -945,6 +945,7 @@ async def test_catalog_and_assessments_pages(
     assert ">1</td>" in page.text
     assessments = await client.get("/assessments")
     assert assessments.status_code == 200 and "no notable reports" in assessments.text
+    assert assessments.text.count(">More info</a>") == 1
     nav = await client.get("/dashboard")
     assert 'href="/assessments"' in nav.text and 'href="/releases"' in nav.text
 
