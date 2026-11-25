@@ -664,6 +664,8 @@
     "catalog.empty": "Z community.ui.com zatím nejsou načtená žádná vydání — seznam se načte při startu služby beat a pak každý den (Nastavení → Kontroly); „Obnovit teď“ ho načte hned.",
     "catalog.published": "Vydáno",
     "catalog.yours": "Vaše konzole",
+    "catalog.more": "Více informací",
+    "catalog.more_hint": "Celé hodnocení: shrnutí, všechny nalezené problémy, všechny zdroje, historie hodnocení a kterých vašich konzolí/zařízení se týká.",
     "catalog.section.app": "Aplikace",
     "catalog.section.os": "UniFi OS",
     "catalog.section.firmware": "Firmware zařízení",

@@ -939,6 +939,8 @@ async def test_catalog_and_assessments_pages(
     assert page.status_code == 200
     assert "UniFi Protect Application" in page.text and "cameras flicker" in page.text
     assert 'href="https://www.reddit.com/r/x"' in page.text
+    # Every row has its own way to the full assessment, not only "+N" sources.
+    assert page.text.count(">More info</a>") == 1
     # The console in this Fabric runs 7.3.70: counted under "your consoles".
     assert ">1</td>" in page.text
     assessments = await client.get("/assessments")

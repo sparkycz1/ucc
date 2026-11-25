@@ -48,6 +48,7 @@
             <th>{{ t(request, "releases.table.why") }}</th>
             <th>{{ t(request, "releases.sources") }}</th>
             <th>{{ t(request, "catalog.yours" if group.kind == 'app' else "catalog.yours_devices") }}</th>
+            <th><span class="visually-hidden">{{ t(request, "catalog.more") }}</span></th>
           </tr>
         </thead>
         <tbody>
@@ -64,6 +65,7 @@
               <td>{{ release.short_reason or ('—' if release.effective_risk_level is not none else t(request, "releases.waiting")) }}</td>
               <td>{{ source_links(release) }}</td>
               <td>{{ running.get(release.id, 0) or '—' }}</td>
+              <td class="nowrap"><a class="button button-secondary button-small" href="/releases/{{ release.id }}" title="{{ t(request, 'catalog.more_hint') }}">{{ t(request, "catalog.more") }}</a></td>
             </tr>
           {% endfor %}
         </tbody>
