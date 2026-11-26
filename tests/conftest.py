@@ -103,6 +103,18 @@ def ai_slots_free(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(slots, "acquire", _acquire)
     monkeypatch.setattr(slots, "release", _release)
     monkeypatch.setattr(slots, "in_use", _in_use)
+
+    # Same for the activity marks (`app.services.activity`): no Redis.
+    from app.services import activity
+
+    async def _mark(kind: str, key: str, ttl: int | None) -> None:
+        return None
+
+    async def _count(kind: str) -> int:
+        return 0
+
+    monkeypatch.setattr(activity, "_mark", _mark)
+    monkeypatch.setattr(activity, "count", _count)
     return released
 
 

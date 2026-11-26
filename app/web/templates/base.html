@@ -11,7 +11,7 @@
   <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
   {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body{% block body_attrs %}{% endblock %}>
   {% from "partials/_brand.html" import render as render_brand %}
   <a class="skip-link" href="#main-content">{{ t(request, "nav.skip_to_content") }}</a>
   <header class="site-header">
@@ -49,6 +49,8 @@
       {% endif %}
     </nav>
     <div class="site-header-user">
+      <a id="activity" class="activity-slot" href="{{ '/status' if current_user.has_permission('settings.view') else '/assessments' }}"
+         aria-live="polite" data-done-text="{{ t(request, 'activity.done') }}"></a>
       {% set current_theme = 'light' if request.cookies.get('theme') == 'light' else 'dark' %}
       {% set next_theme_label = t(request, 'theme.dark' if current_theme == 'light' else 'theme.light') %}
       <form method="post" action="/theme" class="inline-form">
@@ -96,6 +98,9 @@
 
   <script src="/static/js/htmx.min.js" defer></script>
   <script src="/static/js/confirm.js" defer></script>
+  <script src="/static/js/busy.js" defer></script>
+  <script src="/static/js/tooltip.js" defer></script>
+  <script src="/static/js/activity.js" defer></script>
   <script src="/static/js/bulk-select.js" defer></script>
   <script src="/static/js/model-picker.js" defer></script>
   <script src="/static/js/auto-submit.js" defer></script>

@@ -84,6 +84,7 @@ from app.releases.verdicts import (
     update_targets,
     visible_targets,
 )
+from app.services import activity
 from app.services.live_updates import KIND_UPDATES, publish_fabric_event
 from app.services.notifications import notify
 from app.tasks.celery_app import celery_app
@@ -193,6 +194,16 @@ async def _assess_release_now(release_id: str, force: bool) -> dict[str, Any]:
         release = await session.get(Release, uuid.UUID(release_id))
         if release is None:
             return {"ok": False, "error": "Release not found."}
+        queued = release.assessment_queued_at
+        if (
+            not force
+            and release.assessed_at is not None
+            and (queued is None or release.assessed_at >= queued)
+        ):
+            # Already rated since it was queued — a duplicate delivery (a
+            # worker restart redelivers, "Refresh now" re-queues). Nothing
+            # to spend tokens on.
+            return {"ok": True, "skipped": "already assessed"}
         app_settings = await get_or_create_app_settings(session)
         chain = await model_chain(session, app_settings)
         if not chain:
@@ -215,7 +226,9 @@ async def _assess_release_now(release_id: str, force: bool) -> dict[str, Any]:
             release.published_at = parse_time(evidence.release.created_at)
         if not force and not await stage_wanted(session, release, app_settings):
             # Its stage is hidden wherever it would apply: keep what was
-            # learned (the stage, so it isn't claimed again), skip the model.
+            # learned (the stage, so it isn't claimed again), skip the model,
+            # and drop the queue mark — it isn't waiting for anything.
+            release.assessment_queued_at = None
             await session.commit()
             return {"ok": True, "skipped": f"stage {release.stage} is hidden"}
 
@@ -581,17 +594,19 @@ def reassess_releases() -> None:
     asyncio.run(tracked("reassess-releases", _reassess_releases()))
 
 
-async def _refresh_release_catalog() -> dict[str, Any]:
+async def _refresh_release_catalog(assess_now: bool = False) -> dict[str, Any]:
     """Beat (every `release_catalog_interval_hours`), Beat start, or the
     Refresh button: the newest versions of every UniFi application
     from community.ui.com (the Releases page), each never-rated one
-    enqueued for assessment when a model is configured."""
+    enqueued for assessment when a model is configured. `assess_now` (the
+    button) also re-queues the unrated ones already queued or failed
+    within the last hour, instead of waiting for their retry."""
     async with db_session.AsyncSessionLocal() as session:
         app_settings = await get_or_create_app_settings(session)
         hidden = global_policy(app_settings)
         rows = await refresh_catalog(session, hidden_stages=hidden.hidden_stages)
         to_assess = (
-            claim_unrated(r for r in rows if not hidden.hides(r.stage))
+            claim_unrated((r for r in rows if not hidden.hides(r.stage)), retry_now=assess_now)
             if await assessment_model(session, app_settings)
             else []
         )
@@ -602,5 +617,11 @@ async def _refresh_release_catalog() -> dict[str, Any]:
 
 
 @celery_app.task(name="app.tasks.release_jobs.refresh_release_catalog")
-def refresh_release_catalog() -> dict[str, Any]:
-    return asyncio.run(tracked("refresh-release-catalog", _refresh_release_catalog()))
+def refresh_release_catalog(assess_now: bool = False) -> dict[str, Any]:
+    return asyncio.run(tracked("refresh-release-catalog", _refresh_catalog_marked(assess_now)))
+
+
+async def _refresh_catalog_marked(assess_now: bool) -> dict[str, Any]:
+    """`_refresh_release_catalog`, shown as running in the activity indicator."""
+    async with activity.running("catalog", "catalog", 600):
+        return await _refresh_release_catalog(assess_now)

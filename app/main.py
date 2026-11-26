@@ -19,6 +19,7 @@ from app.core.proxy_headers import ProxyHeadersMiddleware
 from app.core.version import APP_VERSION
 from app.db.session import AsyncSessionLocal
 from app.scheduling.builtin_actions import register_builtin_actions
+from app.web.routes import activity as activity_routes
 from app.web.routes import (
     ai,
     audit,
@@ -166,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router)
     app.include_router(settings_routes.router)
     app.include_router(status.router)
+    app.include_router(activity_routes.router)
     app.include_router(theme.router)
     # No HTTP dependency here — WebSocket connections never go through
     # `app.auth.middleware`, so this router does its own auth inside the

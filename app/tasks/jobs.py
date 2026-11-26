@@ -38,6 +38,7 @@ from app.db.models.audit_log import AuditLogEntry, AuditOutcome
 from app.db.models.fabric import Fabric
 from app.db.models.notification_log import NotificationLog
 from app.db.models.notification_rule import NotificationEventType
+from app.services import activity
 from app.services.live_updates import KIND_INVENTORY, publish_fabric_event
 from app.services.notifications import notify
 from app.tasks.celery_app import celery_app
@@ -106,9 +107,15 @@ async def _sync_fabric(fabric_id: str) -> dict[str, Any]:
     }
 
 
+async def _sync_fabric_marked(fabric_id: str) -> dict[str, Any]:
+    """`_sync_fabric`, shown as running in the activity indicator."""
+    async with activity.running("sync", fabric_id, 300):
+        return await _sync_fabric(fabric_id)
+
+
 @celery_app.task(name="app.tasks.jobs.sync_fabric")
 def sync_fabric(fabric_id: str) -> dict[str, Any]:
-    return asyncio.run(_sync_fabric(fabric_id))
+    return asyncio.run(_sync_fabric_marked(fabric_id))
 
 
 # A Fabric is due a little early rather than a whole tick late.

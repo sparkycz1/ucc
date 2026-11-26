@@ -67,6 +67,7 @@ from app.releases.service import (
 from app.releases.sources.community import SITE_URL, CommunityClient
 from app.releases.verdicts import TargetSource, TargetVerdict
 from app.releases.versions import normalize_version
+from app.services import activity
 from app.services.access_scope import fabrics_visible_to
 from app.tasks.release_jobs import assess_release, refresh_release_catalog
 from app.web.templating import templates
@@ -157,7 +158,9 @@ async def refresh_catalog_now(request: Request, db: AsyncSession = Depends(get_d
     """Refresh the catalogue from community.ui.com now instead of waiting
     for Beat (`release_catalog_interval_hours`); new versions are queued
     for assessment by the task itself."""
-    refresh_release_catalog.delay()
+    # A person is waiting: what isn't rated yet is assessed right away too.
+    await activity.start("catalog", "catalog", 600)
+    refresh_release_catalog.delay(True)
     await log_event(
         db,
         request=request,
