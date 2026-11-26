@@ -17,6 +17,7 @@ those SDKs currently ship.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from typing import Any
@@ -239,7 +240,18 @@ async def test_openai_send_tool_call_parses_json_arguments():
     }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, json={"choices": [{"message": message}], "usage": {}})
+        # The OpenAI-compatible kind streams (see `OpenAICompatibleClient`):
+        # the tool call arrives in pieces, the usage in a last chunk.
+        body = json.loads(request.content)
+        assert body["stream"] is True and body["stream_options"] == {"include_usage": True}
+        return _sse(
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": [
+                {"index": 0, "id": "call_1", "type": "function",
+                 "function": {"name": "list_machines", "arguments": '{"group_'}}]}}]},
+            {"choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"arguments": 'name": "web"}'}}]}}]},
+            {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 4}},
+        )  # fmt: skip
 
     client = OpenAICompatibleClient(
         None,
@@ -248,6 +260,7 @@ async def test_openai_send_tool_call_parses_json_arguments():
         transport=_transport2(handler),
     )
     result = await client.send([], TOOLS, "some/model", "SYSTEM")
+    assert (result.input_tokens, result.output_tokens) == (12, 4)
 
     call = result.tool_calls[0]
     assert call.arguments == {"group_name": "web"}
@@ -259,6 +272,46 @@ async def test_openai_send_tool_call_parses_json_arguments():
     # longer byte-for-byte the same dict this test used to build by hand.
     assert follow_up[0] == {k: v for k, v in message.items() if v is not None}
     assert follow_up[1] == {"role": "tool", "tool_call_id": "call_1", "content": "machine-a"}
+
+
+def _sse(*chunks: dict[str, Any]) -> httpx2.Response:
+    envelope = {"id": "c", "object": "chat.completion.chunk", "created": 0, "model": "m"}
+    lines = [f"data: {json.dumps({**envelope, **c})}\n\n" for c in chunks]
+    return httpx2.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=("".join(lines) + "data: [DONE]\n\n").encode(),
+    )
+
+
+async def test_openai_compatible_streams_text_within_its_own_timeout():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return _sse(
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]},
+            {"choices": [{"index": 0, "delta": {"content": "lo"}}]},
+        )
+
+    client = OpenAICompatibleClient(
+        None, "https://litellm.internal/v1", AiProviderKind.OPENAI_COMPATIBLE,
+        transport=_transport2(handler),
+    )  # fmt: skip
+    result = await client.send([], [], "m", "S")
+    assert result.text == "Hello" and result.raw_assistant_message == {
+        "role": "assistant", "content": "Hello"
+    }
+    assert (result.input_tokens, result.output_tokens) == (0, 0)
+
+    class _Slow(httpx2.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+            await asyncio.sleep(5)
+            return _sse()
+
+    slow = OpenAICompatibleClient(
+        None, "https://litellm.internal/v1", AiProviderKind.OPENAI_COMPATIBLE, transport=_Slow()
+    )
+    slow.chat_timeout = 0.05
+    with pytest.raises(AiProviderError, match="no complete answer within"):
+        await slow.send([], [], "m", "S")
 
 
 async def test_openai_compatible_uses_the_configured_base_url():

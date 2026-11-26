@@ -54,6 +54,7 @@ are just the wire format's own JSON, never a Python SDK object.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -259,6 +260,16 @@ class OpenAICompatibleClient(BaseAiClient):
     at all, so a harmless placeholder stands in for one when none is
     configured. A chat turn against a provider that actually needs a real
     key still fails normally, with that provider's own 401.
+
+    **The OpenAI-compatible kind streams** (0.4.1+) and assembles the
+    answer itself. A proxy in front of a self-hosted model (LiteLLM's
+    `timeout`, nginx's `proxy_read_timeout`) typically times a non-streamed
+    request out as a whole — and a local model writing a 1–2 000-token
+    assessment at ~25 tokens/s needs well over the 20 s such a proxy
+    allows, while the chat UIs in front of the same model stream and never
+    hit it. Streamed, the proxy only waits for the next chunk; the total
+    is still bounded by this provider's own timeout (`chat_timeout`,
+    enforced here around the whole stream).
     """
 
     _NO_KEY_PLACEHOLDER = "unset"
@@ -272,6 +283,7 @@ class OpenAICompatibleClient(BaseAiClient):
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
         self.kind_value = kind.value
+        self._stream = kind == AiProviderKind.OPENAI_COMPATIBLE
         self._label = {
             AiProviderKind.OPENAI: "OpenAI",
             AiProviderKind.OPENAI_COMPATIBLE: "The OpenAI-compatible endpoint",
@@ -312,24 +324,31 @@ class OpenAICompatibleClient(BaseAiClient):
             ]
             kwargs["tool_choice"] = "auto"
 
-        try:
-            response = await self._client.chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": system_prompt}, *messages],
-                timeout=self.chat_timeout,
-                **kwargs,
+        full_messages = [{"role": "system", "content": system_prompt}, *messages]
+        if self._stream:
+            message, input_tokens, output_tokens = await self._send_streamed(
+                model, full_messages, kwargs
             )
-        except openai.OpenAIError as exc:
-            raise _wrap_provider_error(self._label, exc) from exc
+        else:
+            try:
+                response = await self._client.chat.completions.create(
+                    model=model,
+                    messages=full_messages,
+                    timeout=self.chat_timeout,
+                    **kwargs,
+                )
+            except openai.OpenAIError as exc:
+                raise _wrap_provider_error(self._label, exc) from exc
 
-        choice = response.choices[0] if response.choices else None
-        # `exclude_none=True`: drops fields like `refusal`/`audio` that are
-        # `None` here and weren't part of the raw wire format this client
-        # used to build by hand — keeps `provider_native` (replayed verbatim
-        # next turn) the same minimal shape as before.
-        message: dict[str, Any] = (
-            choice.message.model_dump(mode="json", exclude_none=True) if choice else {}
-        )
+            choice = response.choices[0] if response.choices else None
+            # `exclude_none=True`: drops fields like `refusal`/`audio` that
+            # are `None` here and weren't part of the raw wire format this
+            # client used to build by hand — keeps `provider_native`
+            # (replayed verbatim next turn) the same minimal shape as before.
+            message = choice.message.model_dump(mode="json", exclude_none=True) if choice else {}
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
 
         tool_calls: list[ToolCall] = []
         for entry in message.get("tool_calls") or []:
@@ -352,15 +371,70 @@ class OpenAICompatibleClient(BaseAiClient):
                 )
             )
 
-        usage = response.usage
         content = message.get("content")
         return ChatTurnResult(
             text=str(content) if content else None,
             tool_calls=tool_calls,
-            input_tokens=usage.prompt_tokens if usage else 0,
-            output_tokens=usage.completion_tokens if usage else 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             raw_assistant_message=message,
         )
+
+    async def _send_streamed(
+        self, model: str, messages: list[Any], kwargs: dict[str, Any]
+    ) -> tuple[dict[str, Any], int, int]:
+        """One streamed completion, assembled into the same message dict a
+        non-streamed one has (`role`, `content`, `tool_calls`), plus its
+        token usage (`stream_options.include_usage`; 0 when the endpoint
+        doesn't report it)."""
+        content: list[str] = []
+        calls: dict[int, dict[str, Any]] = {}
+        input_tokens = output_tokens = 0
+        try:
+            async with asyncio.timeout(self.chat_timeout):
+                stream = await self._client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    timeout=self.chat_timeout,
+                    **kwargs,
+                )
+                async for chunk in stream:
+                    if chunk.usage is not None:
+                        input_tokens = chunk.usage.prompt_tokens or 0
+                        output_tokens = chunk.usage.completion_tokens or 0
+                    for choice in chunk.choices or []:
+                        delta = choice.delta
+                        if delta.content:
+                            content.append(delta.content)
+                        for part in delta.tool_calls or []:
+                            call = calls.setdefault(
+                                part.index,
+                                {"id": None, "type": "function",
+                                 "function": {"name": "", "arguments": ""}},
+                            )  # fmt: skip
+                            if part.id:
+                                call["id"] = part.id
+                            if part.function is not None:
+                                call["function"]["name"] += part.function.name or ""
+                                call["function"]["arguments"] += part.function.arguments or ""
+        except TimeoutError as exc:
+            raise AiProviderError(
+                f"{self._label} request failed: no complete answer within "
+                f"{self.chat_timeout:.0f} s"
+            ) from exc
+        except openai.OpenAIError as exc:
+            raise _wrap_provider_error(self._label, exc) from exc
+        message: dict[str, Any] = {"role": "assistant"}
+        if content:
+            message["content"] = "".join(content)
+        if calls:
+            message["tool_calls"] = [
+                {**call, "id": call["id"] or str(uuid.uuid4())}
+                for _index, call in sorted(calls.items())
+            ]
+        return message, input_tokens, output_tokens
 
     def build_user_message(self, text: str) -> Any:
         return {"role": "user", "content": text}
