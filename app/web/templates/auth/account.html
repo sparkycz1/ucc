@@ -121,6 +121,7 @@
       {% endif %}
 
       {% if webauthn_credentials %}
+        <div class="table-scroll">
         <table class="data-table">
           <thead>
             <tr><th>{{ t(request, "roles.table.name") }}</th><th>{{ t(request, "account.passkeys.type") }}</th><th>{{ t(request, "account.passkeys.added") }}</th><th>{{ t(request, "account.passkeys.last_used") }}</th><th></th></tr>
@@ -143,6 +144,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
       {% else %}
         <p class="hint">{{ t(request, "account.passkeys.none_registered") }}</p>
       {% endif %}

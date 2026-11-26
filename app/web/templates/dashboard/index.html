@@ -55,6 +55,7 @@
     <h2>{{ t(request, "nav.scheduling") }}</h2>
     <p class="hint">{{ t(request, "dashboard.scheduling.enabled_count", count=enabled_task_count) }}</p>
     {% if upcoming_tasks %}
+      <div class="table-scroll">
       <table class="data-table">
         <thead><tr><th>{{ t(request, "dashboard.scheduling.task") }}</th><th>{{ t(request, "dashboard.scheduling.next_run") }}</th></tr></thead>
         <tbody>
@@ -66,6 +67,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <p class="hint">{{ t(request, "dashboard.scheduling.none_enabled") }}</p>
     {% endif %}
@@ -80,6 +82,7 @@
       <p class="hint">{{ t(request, "dashboard.activity.denied_count", count=recent_denied_count) }}</p>
     {% endif %}
     {% if recent_audit_entries %}
+      <div class="table-scroll">
       <table class="data-table">
         <thead><tr><th>{{ t(request, "dashboard.activity.when") }}</th><th>{{ t(request, "dashboard.activity.who") }}</th><th>{{ t(request, "dashboard.activity.action") }}</th><th>{{ t(request, "dashboard.activity.outcome") }}</th></tr></thead>
         <tbody>
@@ -91,12 +94,13 @@
             <td>
               {% if entry.outcome.value == 'success' %}<span class="badge badge-ok">{{ t(request, "dashboard.activity.outcome_success") }}</span>
               {% elif entry.outcome.value == 'denied' %}<span class="badge badge-warn">{{ t(request, "dashboard.activity.outcome_denied") }}</span>
-              {% else %}<span class="badge badge-error">{{ entry.outcome.value }}</span>{% endif %}
+              {% else %}<span class="badge badge-error">{{ t(request, "dashboard.activity.outcome_failure") }}</span>{% endif %}
             </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <p class="hint">{{ t(request, "dashboard.activity.none_yet") }}</p>
     {% endif %}

@@ -31,9 +31,12 @@
       <p class="hint">{{ t(request, "settings.ai.choice_none") }}</p>
     {% endif %}
 
+    <hr>
+    <h3>{{ t(request, "settings.ai.providers_title") }}</h3>
+    <div class="provider-grid">
     {% for config in ai_configs %}
-      <hr>
-      <h3>{{ config.kind.value }}</h3>
+      <div class="provider-card{{ ' provider-on' if config.enabled else '' }}">
+      <h4>{{ config.kind.value }} {% if config.enabled %}<span class="badge badge-ok">{{ t(request, "settings.integrations.enabled") }}</span>{% endif %}</h4>
       <form method="post" action="/settings/ai/provider" class="form" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="kind" value="{{ config.kind.value }}">
@@ -127,7 +130,9 @@
           </div>
         </div>
       {% endif %}
+      </div>
     {% endfor %}
+    </div>
 
     <hr>
     <h3>{{ t(request, "settings.ai.token_limits") }}</h3>
@@ -171,6 +176,7 @@
     </div>
 
     {% if ai_usage.by_model %}
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr>
@@ -188,10 +194,12 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% endif %}
 
     {% if ai_usage.recent %}
       <h4>{{ t(request, "settings.ai.usage_recent") }}</h4>
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr>
@@ -214,5 +222,6 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% endif %}
   </section>

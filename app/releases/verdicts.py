@@ -231,6 +231,9 @@ def update_targets(
             if target:
                 targets.append(target)
         for device in console.devices:
+            if is_console_entry(console, device):
+                # Its "firmware" is the console's UniFi OS, a target above.
+                continue
             target = _target(
                 kind=ReleaseKind.FIRMWARE.value,
                 product=device_product(device) or "",

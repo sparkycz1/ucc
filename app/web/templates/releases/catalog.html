@@ -41,6 +41,7 @@
       {% if group.kind != 'app' %}
         <p class="hint">{{ t(request, "catalog.models") }}: {% for product in group.products %}<span title="{{ product }}">{{ model_names.get(product, product) }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
       {% endif %}
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr>
@@ -65,7 +66,7 @@
                 {% if release.manual_risk_level is not none %}<span class="badge">{{ t(request, "releases.manual") }}</span>{% endif %}
                 {% if release.is_allowed %}<span class="badge badge-ok">{{ t(request, "releases.allowed") }}</span>{% endif %}
               </td>
-              <td>{{ release.short_reason or ('—' if release.effective_risk_level is not none else t(request, "releases.waiting")) }}</td>
+              <td class="text-cell">{{ release.short_reason or ('—' if release.effective_risk_level is not none else t(request, "releases.waiting")) }}</td>
               <td>{{ source_links(release) }}</td>
               <td>{{ running.get(release.id, 0) or '—' }}</td>
               <td class="nowrap"><a class="button button-secondary button-small" href="/releases/{{ release.id }}" title="{{ t(request, 'catalog.more_hint') }}">{{ t(request, "catalog.more") }}</a></td>
@@ -73,6 +74,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </section>
   {% endfor %}
 {% endblock %}

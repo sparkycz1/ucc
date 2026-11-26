@@ -47,6 +47,7 @@ from app.db.models.role import Permission
 from app.db.session import get_db
 from app.releases.policy import global_policy, stages_from_form
 from app.releases.sources.web import validate_searxng_url
+from app.tasks.release_jobs import refresh_release_catalog
 from app.web.templating import t, templates
 
 router = APIRouter(
@@ -597,6 +598,7 @@ async def update_release_settings(
     assert level is not None
     raw_form = {key: str(value) for key, value in (await request.form()).items()}
     hidden = stages_from_form(raw_form, inherit_allowed=False) or []
+    stages_changed = list(app_settings.hidden_release_stages or []) != hidden
     app_settings.max_acceptable_risk_level = level
     app_settings.hidden_release_stages = hidden
     app_settings.release_assessment_model_id = model_id
@@ -619,6 +621,10 @@ async def update_release_settings(
         app_settings.web_search_api_key_encrypted = encrypt_secret(web_search_api_key.strip())
     await db.commit()
 
+    if stages_changed:
+        # Fetch the newest versions of the stages now shown, so every
+        # catalogue line again has its three (`refresh_catalog`).
+        refresh_release_catalog.delay()
     reddit_on = bool(app_settings.reddit_client_id and app_settings.reddit_client_secret_encrypted)
     await log_event(
         db,

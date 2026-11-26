@@ -564,9 +564,9 @@ async def _refresh_release_catalog() -> dict[str, Any]:
     from community.ui.com (the Releases page), each never-rated one
     enqueued for assessment when a model is configured."""
     async with db_session.AsyncSessionLocal() as session:
-        rows = await refresh_catalog(session)
         app_settings = await get_or_create_app_settings(session)
         hidden = global_policy(app_settings)
+        rows = await refresh_catalog(session, hidden_stages=hidden.hidden_stages)
         to_assess = (
             claim_unrated(r for r in rows if not hidden.hides(r.stage))
             if await assessment_model(session, app_settings)

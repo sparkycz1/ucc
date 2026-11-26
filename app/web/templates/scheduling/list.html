@@ -15,6 +15,7 @@
   {% endif %}
 
   {% if tasks %}
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -88,6 +89,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   {% else %}
     <div class="empty-state">
       <p>{{ t(request, "scheduling.empty") }}</p>
