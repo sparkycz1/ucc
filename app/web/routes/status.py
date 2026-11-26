@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import slots as ai_slots
 from app.auth.dependencies import get_current_user, require_permission
 from app.core.app_settings import get_or_create_app_settings
 from app.db.models.job_run import JobRun
@@ -151,6 +152,7 @@ async def status_page(
         select(func.count()).select_from(Release).where(Release.assessment_error.is_not(None))
     )
     last_assessed = await db.scalar(select(func.max(Release.assessed_at)))
+    app_settings = await get_or_create_app_settings(db)
     return templates.TemplateResponse(
         request,
         "status/page.html",
@@ -162,5 +164,7 @@ async def status_page(
             "failed": failed,
             "failed_count": failed_count or 0,
             "last_assessed": _aware(last_assessed),
+            "slots_in_use": await ai_slots.in_use(),
+            "slots_limit": app_settings.ai_max_concurrent_assessments,
         },
     )

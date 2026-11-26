@@ -97,8 +97,12 @@ def ai_slots_free(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     async def _release(token: str) -> None:
         released.append(token)
 
+    async def _in_use() -> int:
+        return 0
+
     monkeypatch.setattr(slots, "acquire", _acquire)
     monkeypatch.setattr(slots, "release", _release)
+    monkeypatch.setattr(slots, "in_use", _in_use)
     return released
 
 

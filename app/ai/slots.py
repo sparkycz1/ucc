@@ -80,3 +80,33 @@ async def release(token: str) -> None:
             await client.aclose()
     except Exception:  # noqa: BLE001 - it expires on its own anyway
         logger.warning("ai slots: could not release a slot; it expires on its own")
+
+
+async def in_use() -> int | None:
+    """How many slots are taken now (expired ones don't count); `None` when
+    Redis can't be reached."""
+    try:
+        client = _client()
+        try:
+            return int(await client.zcount(SLOTS_KEY, time.time(), "+inf"))
+        finally:
+            await client.aclose()
+    except Exception:  # noqa: BLE001 - informational only
+        return None
+
+
+async def clear() -> None:
+    """Free every slot — called when a worker starts (`app.tasks.celery_app`):
+    any slot left then belonged to an assessment a stopped worker never
+    finished (a restart, an upgrade), and would otherwise block every new
+    one until it expires. With several workers, one restarting may free a
+    slot another still uses — briefly one assessment more than the limit,
+    which is the better failure."""
+    try:
+        client = _client()
+        try:
+            await client.delete(SLOTS_KEY)
+        finally:
+            await client.aclose()
+    except Exception:  # noqa: BLE001 - they expire on their own anyway
+        logger.warning("ai slots: could not clear the slots at worker start")

@@ -547,6 +547,7 @@ async def test_status_page(
     assert page.status_code == 200
     assert "Releases catalogue" in page.text and "HTTP 503" in page.text
     assert "Rate limited" in page.text and "1 online" in page.text
+    assert "AI slots 0/2 in use" in page.text
     assert 'href="/status"' in (await client.get("/dashboard")).text
 
     await login_as(client, permissions={Permission.FABRIC_VIEW}, username="viewer")
