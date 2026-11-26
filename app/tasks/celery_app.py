@@ -285,8 +285,6 @@ def _on_worker_ready(sender: Any = None, **kwargs: Any) -> None:
     """Free the AI assessment slots (`app.ai.slots`) a stopped worker left
     taken — after an upgrade or restart every assessment would otherwise
     wait until those expire (the task time limit, 15 min). Best-effort."""
-    import asyncio
-
     from app.ai import slots
 
     try:
