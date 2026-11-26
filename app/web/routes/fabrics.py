@@ -14,6 +14,7 @@ stored only via `encrypt_secret`, and never rendered back into a page.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -57,6 +58,7 @@ from app.releases.verdicts import (
     verdicts,
 )
 from app.schemas.fabric import FabricForm
+from app.services import activity
 from app.services.access_scope import can_see_fabric_id, fabrics_visible_to
 from app.tasks.jobs import sync_fabric
 from app.unifi.client import SiteManagerClient, SiteManagerError
@@ -368,6 +370,11 @@ async def trigger_sync(
     """Read-only against UniFi (it only re-reads inventory), so plain
     `fabric.view` may ask for it."""
     fabric = await _get_fabric_or_404(db, user, fabric_id)
+    # Marks the sync as underway for the activity indicator (`/activity`)
+    # and keeps Beat's tick from enqueueing a second one right after.
+    fabric.last_sync_attempt_at = datetime.now(UTC)
+    await db.commit()
+    await activity.start("sync", str(fabric.id), 300)
     sync_fabric.delay(str(fabric.id))
     await log_event(
         db,

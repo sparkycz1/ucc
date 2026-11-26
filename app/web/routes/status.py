@@ -32,8 +32,7 @@ from app.db.models.release import Release
 from app.db.models.role import Permission
 from app.db.models.user import User
 from app.db.session import get_db
-from app.releases.policy import global_policy
-from app.releases.service import REQUEUE_AFTER
+from app.releases.service import assessment_queue
 from app.services.access_scope import fabrics_visible_to
 from app.tasks.celery_app import celery_app
 from app.web.templating import templates
@@ -135,25 +134,8 @@ async def status_page(
         key=lambda f: f.name.lower(),
     )
 
-    # Claimed but never rated, split by why: really waiting for a worker
-    # (queued within the last `REQUEUE_AFTER`, no error), failed and waiting
-    # for the next retry, or in a globally hidden stage (not rated on
-    # purpose). One "queued" count used to lump all three together.
-    hidden = global_policy(await get_or_create_app_settings(db))
-    queued = retrying = hidden_count = 0
-    for stage, queued_at, error in (
-        await db.execute(
-            select(Release.stage, Release.assessment_queued_at, Release.assessment_error).where(
-                Release.assessment_queued_at.is_not(None), Release.assessed_at.is_(None)
-            )
-        )
-    ).all():
-        if hidden.hides(stage):
-            hidden_count += 1
-        elif error or (_aware(queued_at) or now) < now - REQUEUE_AFTER:
-            retrying += 1
-        else:
-            queued += 1
+    queue = await assessment_queue(db, await get_or_create_app_settings(db))
+    queued, retrying, hidden_count = queue.queued, queue.retrying, queue.hidden
     failed = list(
         (
             await db.execute(

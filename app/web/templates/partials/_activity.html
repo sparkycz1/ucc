@@ -1,0 +1,12 @@
+{# The header's activity indicator (`app.web.routes.activity`). #}
+<span class="activity{{ ' activity-busy' if busy else '' }}" data-busy="{{ busy }}">
+  {%- if busy -%}
+    <span class="spinner" aria-hidden="true"></span>
+    {%- set parts = [] -%}
+    {%- if counts.syncs %}{% set _ = parts.append(t(request, "activity.syncs", count=counts.syncs)) %}{% endif -%}
+    {%- if counts.catalog %}{% set _ = parts.append(t(request, "activity.catalog")) %}{% endif -%}
+    {%- if counts.assessing %}{% set _ = parts.append(t(request, "activity.assessing", count=counts.assessing)) %}{% endif -%}
+    {%- if counts.waiting %}{% set _ = parts.append(t(request, "activity.waiting", count=counts.waiting)) %}{% endif -%}
+    <span class="activity-text">{{ parts | join(" · ") }}</span>
+  {%- endif -%}
+</span>

@@ -609,8 +609,15 @@ async def test_hidden_stages_still_leave_three_versions_in_the_catalog(
     async with jobs_db() as db:
         (await get_or_create_app_settings(db)).hidden_release_stages = ["RC"]
         await db.commit()
-    await release_jobs._refresh_release_catalog()
+    await _configure_model(jobs_db)
+    result = await release_jobs._refresh_release_catalog()
+    # What is rated is what the page shows: the three GA versions.
+    assert result["queued"] == 3
+    queued = [args[0] for name, args, _kw in celery_calls if name.endswith("assess_release")]
     async with jobs_db() as db:
+        rows = [await db.get(Release, uuid.UUID(i)) for i in queued]
+        rated = {r.version for r in rows if r is not None}
+        assert rated == {"11.0.104", "11.0.103", "11.0.99"}
         shown = await service.catalog(db, hidden_stages=frozenset({"RC"}))
         network = next(g for g in shown if g.products == ["network"])
         assert [r.version for r in network.releases] == ["11.0.104", "11.0.103", "11.0.99"]
@@ -682,3 +689,81 @@ def test_a_starting_worker_frees_the_slots(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(slots, "clear", _clear)
     celery_module._on_worker_ready()
     assert cleared == [True]
+
+
+# --- 0.4.5: activity, refresh assesses, duplicates --------------------------------------
+
+
+async def test_activity_fragment_counts_what_runs(
+    client: Any, db_session_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.ai import slots
+    from app.services import activity
+
+    async def _count(kind: str) -> int:
+        return {"sync": 1, "catalog": 1}.get(kind, 0)
+
+    async def _in_use() -> int:
+        return 1
+
+    monkeypatch.setattr(activity, "count", _count)
+    monkeypatch.setattr(slots, "in_use", _in_use)
+    now = datetime.now(UTC)
+    async with db_session_factory() as db:
+        for version in ("1.0.1", "1.0.2", "1.0.3"):
+            db.add(Release(kind="app", product="network", version=version,
+                           assessment_queued_at=now))  # fmt: skip
+        await db.commit()
+    fragment = (await client.get("/activity")).text
+    assert 'data-busy="5"' in fragment  # 1 sync + catalogue + 1 assessing + 2 waiting
+    assert "Syncing 1 Fabric" in fragment and "Assessing 1" in fragment
+    assert "2 waiting" in fragment and "Refreshing the catalogue" in fragment
+    page = (await client.get("/assessments")).text
+    assert 'id="activity"' in page and "/static/js/activity.js" in page
+    assert "data-refresh-on-idle" in page and "/static/js/tooltip.js" in page
+
+
+async def test_refresh_now_rates_what_isnt_rated_at_once(
+    client: Any, celery_calls: Any
+) -> None:
+    await client.get("/releases")
+    csrf = client.cookies.get("csrftoken")
+    response = await client.post("/releases/refresh", data={"csrf_token": csrf})
+    assert response.status_code == 303
+    assert celery_calls[-1][:2] == ("app.tasks.release_jobs.refresh_release_catalog", (True,))
+
+
+def test_a_button_retries_now_what_failed_a_minute_ago() -> None:
+    from app.releases.service import claim_unrated
+
+    now = datetime.now(UTC)
+    failed = Release(
+        id=uuid.uuid4(), kind="app", product="network", version="1",
+        assessment_queued_at=now - timedelta(minutes=1), assessment_error="408",
+    )  # fmt: skip
+    assert claim_unrated([failed], now=now) == []
+    assert claim_unrated([failed], now=now, retry_now=True) == [str(failed.id)]
+
+
+async def test_a_duplicate_delivery_spends_no_tokens(
+    jobs_db: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _configure_model(jobs_db)
+    now = datetime.now(UTC)
+    async with jobs_db() as db:
+        release = Release(
+            kind="app", product="network", version="1", risk_level=2,
+            assessed_at=now, assessment_queued_at=now - timedelta(minutes=5),
+        )  # fmt: skip
+        db.add(release)
+        await db.commit()
+        release_id = str(release.id)
+
+    def _boom(provider: Any) -> Any:
+        raise AssertionError("no model call expected")
+
+    monkeypatch.setattr(release_jobs, "build_client", _boom)
+    assert (await release_jobs._assess_release(release_id)) == {
+        "ok": True, "skipped": "already assessed"
+    }

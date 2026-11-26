@@ -1607,3 +1607,84 @@ a.htmx-request, .link-button.htmx-request { opacity: 0.6; cursor: progress; }
 @media (prefers-reduced-motion: reduce) {
   .htmx-settling { animation: none; }
 }
+
+/* --- Feedback: tooltips, the activity indicator, busy buttons, toasts --- */
+
+/* tooltip.js: every `title`, shown at once and never clipped. */
+.ucc-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(22rem, calc(100vw - 8px));
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+[data-tip] { cursor: help; }
+a[data-tip], button[data-tip], input[data-tip], label[data-tip], summary[data-tip] { cursor: pointer; }
+
+/* activity.js: what runs right now, in the header. */
+.activity-slot { text-decoration: none; color: var(--color-muted); font-size: 0.85rem; }
+.activity-slot:empty { display: none; }
+.activity-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.spinner {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ucc-spin 0.8s linear infinite;
+}
+@keyframes ucc-spin { to { transform: rotate(360deg); } }
+
+/* busy.js: a clicked button says it's working. */
+.is-busy { position: relative; pointer-events: none; opacity: 0.85; }
+.is-busy::before {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.45em;
+  vertical-align: -0.1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ucc-spin 0.8s linear infinite;
+}
+
+.toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1000;
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--color-ok) 55%, var(--color-border));
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm);
+  transition: opacity 0.6s ease;
+}
+.toast-hide { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner, .is-busy::before { animation: none; }
+}
+@media (max-width: 1180px) {
+  .activity-text { display: none; }
+}

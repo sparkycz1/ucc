@@ -308,7 +308,7 @@ async def refresh_catalog(
                 items = await community.search(title, 30)
             except SourceError as exc:
                 logger.info("Release catalog refresh failed at %s: %s", product, exc)
-                return await _catalog_rows(db)
+                return await _catalog_rows(db, hidden_stages)
             posts = sorted(
                 filter(shown, matching_posts("app", product, items)),
                 key=lambda p: version_key(p.version) or (),
@@ -336,12 +336,17 @@ async def refresh_catalog(
                     await _upsert_post(db, kind, product, post)
     finally:
         await community.aclose()
-    return await _catalog_rows(db)
+    return await _catalog_rows(db, hidden_stages)
 
 
-async def _catalog_rows(db: AsyncSession) -> list[Release]:
+async def _catalog_rows(db: AsyncSession, hidden_stages: frozenset[str]) -> list[Release]:
+    """The rows the catalogue shows — with the same hidden stages, so what
+    gets rated is what the page lists (a hidden RC must not take the place
+    of the third GA version)."""
     await db.flush()
-    return [r for group in await catalog(db) for r in group.all_rows]
+    return [
+        r for group in await catalog(db, hidden_stages=hidden_stages) for r in group.all_rows
+    ]
 
 
 @dataclass
@@ -455,12 +460,15 @@ def parse_time(value: str | None) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def claim_unrated(releases: Iterable[Release], *, now: datetime | None = None) -> list[str]:
+def claim_unrated(
+    releases: Iterable[Release], *, now: datetime | None = None, retry_now: bool = False
+) -> list[str]:
     """Ids of `releases` never rated (and no human level) that aren't
     already queued, marked as queued. Several Fabrics syncing at once, or
     the catalogue refresh, all see the same new release; the mark keeps it
     to one assessment (and an assessment that keeps failing to one retry
-    per `REQUEUE_AFTER`). The caller commits."""
+    per `REQUEUE_AFTER`; `retry_now` — a person pressed a button — skips
+    that wait). The caller commits."""
     now = now or datetime.now(UTC)
     claimed = []
     seen: set[str] = set()
@@ -474,7 +482,7 @@ def claim_unrated(releases: Iterable[Release], *, now: datetime | None = None) -
         if release.assessed_at is not None or release.manual_risk_level is not None:
             continue
         queued = release.assessment_queued_at
-        if queued is not None and _aware(queued) > now - REQUEUE_AFTER:
+        if not retry_now and queued is not None and _aware(queued) > now - REQUEUE_AFTER:
             continue
         release.assessment_queued_at = now
         post = (release.kind, release.community_release_id or "")
@@ -524,6 +532,39 @@ async def share_rating(db: AsyncSession, release: Release) -> list[Release]:
 
 
 REQUEUE_AFTER = timedelta(hours=1)
+
+
+@dataclass(frozen=True)
+class AssessmentQueue:
+    """Releases claimed for assessment and not rated, by why (Status page,
+    activity indicator)."""
+
+    # Waiting for a worker or a free AI slot right now.
+    queued: int
+    # Last attempt failed (or its task was lost): retried after `REQUEUE_AFTER`.
+    retrying: int
+    # In a globally hidden stage: not rated, on purpose.
+    hidden: int
+
+
+async def assessment_queue(db: AsyncSession, app_settings: AppSettings) -> AssessmentQueue:
+    hidden_policy = global_policy(app_settings)
+    now = datetime.now(UTC)
+    queued = retrying = hidden = 0
+    for stage, queued_at, error in (
+        await db.execute(
+            select(Release.stage, Release.assessment_queued_at, Release.assessment_error).where(
+                Release.assessment_queued_at.is_not(None), Release.assessed_at.is_(None)
+            )
+        )
+    ).all():
+        if hidden_policy.hides(stage):
+            hidden += 1
+        elif error or queued_at is None or _aware(queued_at) < now - REQUEUE_AFTER:
+            retrying += 1
+        else:
+            queued += 1
+    return AssessmentQueue(queued, retrying, hidden)
 
 
 async def stage_wanted(db: AsyncSession, release: Release, app_settings: AppSettings) -> bool:
