@@ -21,14 +21,18 @@ a one-line `asyncio.run(...)` wrapper, sessions come from
   versions of every UniFi application from community.ui.com, for the
   Releases page, each new one enqueued for assessment.
 
-Unattended, so not audit-logged (CLAUDE.md); a human asking for a
-re-assessment is audit-logged by the web route that enqueues it.
+The sweeps themselves are unattended, so not audit-logged (CLAUDE.md); a
+human asking for a re-assessment is audit-logged by the web route that
+enqueues it. Every assessment that calls the AI *is* logged
+(`release.assess`), with the model, its tokens and how long it took — it
+costs money, and that is what the operator asked to see per action.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -37,11 +41,14 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.ai.base import AiProviderError
+from app.ai.fallback import model_chain
 from app.ai.providers import build_client
-from app.ai.usage import check_within_limits, record_usage
+from app.ai.usage import Purpose, check_within_limits, record_usage
+from app.audit import log_event
 from app.core.app_settings import get_or_create_app_settings
 from app.core.config import get_settings
 from app.db import session as db_session
+from app.db.models.audit_log import AuditOutcome
 from app.db.models.console import Console
 from app.db.models.fabric import Fabric
 from app.db.models.notification_rule import NotificationEventType
@@ -49,6 +56,7 @@ from app.db.models.release import RatingSource, Release
 from app.releases.assess import AssessmentError, assess, build_prompt
 from app.releases.context import contextual_risk
 from app.releases.history import RatingSnapshot, record_rating
+from app.releases.policy import global_policy
 from app.releases.service import (
     assessment_model,
     catalog,
@@ -60,16 +68,19 @@ from app.releases.service import (
     refresh_catalog,
     refresh_latest,
     share_rating,
+    stage_wanted,
 )
 from app.releases.verdicts import (
+    PolicyFor,
     UpdateTarget,
     auto_update_applies,
     installed_keys,
     installed_targets,
     load_latest,
     load_releases,
-    max_risk_for,
+    policy_for,
     update_targets,
+    visible_targets,
 )
 from app.services.live_updates import KIND_UPDATES, publish_fabric_event
 from app.services.notifications import notify
@@ -78,9 +89,16 @@ from app.tasks.job_runs import tracked
 
 logger = logging.getLogger(__name__)
 
-# Evidence from three sources plus a model call — well past the default
-# 60 s task limit (`app.tasks.celery_app`).
-ASSESSMENT_TIME_LIMIT_SECONDS = 300
+# Evidence from three sources plus a model call — and, when that fails,
+# the fallback model's — each up to its provider's timeout (at most
+# `MAX_AI_TIMEOUT_SECONDS`). Well past the default 60 s task limit
+# (`app.tasks.celery_app`).
+ASSESSMENT_TIME_LIMIT_SECONDS = 900
+_ASSESS_ACTOR = "release assessment (automatic)"
+
+
+def _ms_since(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
 REASSESS_AFTER = timedelta(hours=24)
 REASSESS_WINDOW = timedelta(days=30)
 
@@ -125,7 +143,13 @@ async def _discover_releases(fabric_id: str) -> dict[str, Any]:
         configured = await assessment_model(session, app_settings) is not None
         to_assess: list[str] = []
         if configured:
-            to_assess = await _claim_unrated(session, targets)
+            # An update to a stage hidden for its console/device isn't rated
+            # (`app.releases.policy`); one whose stage is still unknown is,
+            # and `_assess_release` stops once the evidence says it's hidden.
+            shown = visible_targets(
+                targets, await load_releases(session, targets), policy_for(fabric, app_settings)
+            )
+            to_assess = await _claim_unrated(session, shown)
             await session.commit()
     for release_id in to_assess:
         assess_release.delay(release_id)
@@ -139,16 +163,18 @@ def discover_releases(fabric_id: str) -> dict[str, Any]:
     return asyncio.run(_discover_releases(fabric_id))
 
 
-async def _assess_release(release_id: str) -> dict[str, Any]:
+async def _assess_release(release_id: str, force: bool = False) -> dict[str, Any]:
+    """Rate one release. `force` (a person asked for it) rates it even when
+    its stage is hidden everywhere."""
     async with db_session.AsyncSessionLocal() as session:
         release = await session.get(Release, uuid.UUID(release_id))
         if release is None:
             return {"ok": False, "error": "Release not found."}
         app_settings = await get_or_create_app_settings(session)
-        configured = await assessment_model(session, app_settings)
-        if configured is None:
+        chain = await model_chain(session, app_settings)
+        if not chain:
             return {"ok": False, "error": "Release assessment is not configured."}
-        provider, model = configured
+        started = time.monotonic()
 
         limit_error = await check_within_limits(session, app_settings)
         if limit_error is not None:
@@ -164,6 +190,11 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
             release.community_url = evidence.release.url
             release.stage = evidence.release.stage
             release.published_at = parse_time(evidence.release.created_at)
+        if not force and not await stage_wanted(session, release, app_settings):
+            # Its stage is hidden wherever it would apply: keep what was
+            # learned (the stage, so it isn't claimed again), skip the model.
+            await session.commit()
+            return {"ok": True, "skipped": f"stage {release.stage} is hidden"}
 
         prompt = build_prompt(
             label=product_label(release),
@@ -174,24 +205,70 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
         )
         before = {release.id: RatingSnapshot.of(release), **siblings_before}
         previous_level = release.effective_risk_level
-        try:
-            client = build_client(provider)
-            outcome = await assess(client, model.model_id, prompt, get_settings().default_locale)
-        except (AiProviderError, AssessmentError) as exc:
-            release.assessment_error = str(exc)[:2000]
+        label = product_label(release)
+        target = f"{label} {release.version}"
+        outcome = None
+        used = chain[0]
+        failures: list[str] = []
+        tokens = 0
+        for candidate in chain:
+            call_started = time.monotonic()
+            spent = (0, 0)
+            try:
+                client = build_client(candidate.provider)
+                outcome = await assess(
+                    client, candidate.model.model_id, prompt, get_settings().default_locale
+                )
+                spent = (outcome.input_tokens, outcome.output_tokens)
+            except AssessmentError as exc:
+                spent = (exc.input_tokens, exc.output_tokens)
+                failures.append(f"{candidate.label}: {exc}")
+            except AiProviderError as exc:
+                failures.append(f"{candidate.label}: {exc}")
+            if any(spent):
+                tokens += sum(spent)
+                await record_usage(
+                    session,
+                    user_id=None,
+                    provider_kind=candidate.provider.kind,
+                    model_id=candidate.model.model_id,
+                    input_tokens=spent[0],
+                    output_tokens=spent[1],
+                    purpose=Purpose.ASSESSMENT,
+                    label=target,
+                    duration_ms=_ms_since(call_started),
+                    fallback=candidate.fallback,
+                )
+            if outcome is not None:
+                used = candidate
+                break
+        duration_ms = _ms_since(started)
+        if outcome is None:
+            error = "; ".join(failures)
+            release.assessment_error = error[:2000]
             await session.commit()
-            logger.warning("assess_release(%s) failed: %s", release_id, exc)
-            return {"ok": False, "error": str(exc)}
+            logger.warning("assess_release(%s) failed: %s", release_id, error)
+            await log_event(
+                session,
+                actor=_ASSESS_ACTOR,
+                action="release.assess",
+                summary=f"AI assessment of {target} failed",
+                outcome=AuditOutcome.FAILURE,
+                target_type="release",
+                target_id=release.id,
+                target_label=target,
+                details={
+                    "models": [c.label for c in chain],
+                    "error": error[:1000],
+                    "tokens": tokens,
+                    "duration_ms": duration_ms,
+                },
+            )
+            return {"ok": False, "error": error}
 
-        await record_usage(
-            session,
-            user_id=None,
-            provider_kind=provider.kind,
-            model_id=model.model_id,
-            input_tokens=outcome.input_tokens,
-            output_tokens=outcome.output_tokens,
-        )
         result = outcome.result
+        release.assessment_tokens = tokens
+        release.assessment_duration_ms = duration_ms
         release.risk_level = result.risk_level
         release.base_risk_level = result.base_risk_level
         release.reason = result.reason or None
@@ -199,7 +276,7 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
         release.issues = [issue.model_dump() for issue in result.issues]
         release.sources = evidence.sources()
         release.assessed_at = datetime.now(UTC)
-        release.assessed_by_model = f"{provider.kind.value}/{model.model_id}"
+        release.assessed_by_model = used.label
         release.assessment_error = (
             ("Sources not read: " + "; ".join(evidence.errors))[:2000] if evidence.errors else None
         )
@@ -207,8 +284,31 @@ async def _assess_release(release_id: str) -> dict[str, Any]:
         for rated in [release, *siblings]:
             record_rating(session, rated, RatingSource.AI, release.assessed_by_model)
         await session.commit()
+        await log_event(
+            session,
+            actor=_ASSESS_ACTOR,
+            action="release.assess",
+            summary=(
+                f"AI rated {target} {result.risk_level}/5 with {used.label}"
+                + (" (fallback model)" if used.fallback else "")
+                + f" — {tokens} tokens, {duration_ms / 1000:.1f} s"
+            ),
+            target_type="release",
+            target_id=release.id,
+            target_label=target,
+            details={
+                "model": used.label,
+                "fallback": used.fallback,
+                "failed_first": failures,
+                "risk_level": result.risk_level,
+                "tokens": tokens,
+                "input_tokens": outcome.input_tokens,
+                "output_tokens": outcome.output_tokens,
+                "duration_ms": duration_ms,
+                "shared_with": len(siblings),
+            },
+        )
 
-        label = product_label(release)
         details = f"{result.reason}\n\n{result.summary}" if result.reason else result.summary
         await notify(
             session,
@@ -265,8 +365,8 @@ def _turned_bad(
     before: dict[uuid.UUID, RatingSnapshot],
     max_level: int,
 ) -> tuple[bool, int | None]:
-    """Whether `target` is STOP now but wasn't before the re-rating, and its
-    level now (in context)."""
+    """Whether `target` is STOP now (at its own acceptable `max_level`) but
+    wasn't before the re-rating, and its level now (in context)."""
     release = by_key[target.key]  # type: ignore[index]
     old = before.get(release.id)
     now = contextual_risk(release, target.profile)
@@ -305,8 +405,10 @@ async def notify_rating_changes(
     for fabric in fabrics:
         consoles = await load_consoles(session, fabric.id)
         latest = await load_latest(session, installed_keys(consoles))
-        max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
-        pending = [t for t in update_targets(consoles, latest) if t.key in by_key]
+        resolve: PolicyFor = policy_for(fabric, app_settings)
+        pending = visible_targets(
+            [t for t in update_targets(consoles, latest) if t.key in by_key], by_key, resolve
+        )
         running = [t for t in installed_targets(consoles) if t.key in by_key]
         if not pending and not running:
             continue
@@ -315,14 +417,14 @@ async def notify_rating_changes(
         blocked: dict[uuid.UUID, list[tuple[UpdateTarget, int | None]]] = {}
         auto: list[tuple[UpdateTarget, int | None]] = []
         for target in pending:
-            bad, level = _turned_bad(target, by_key, before, max_level)
+            bad, level = _turned_bad(target, by_key, before, resolve(target).max_risk_level)
             if bad:
                 blocked.setdefault(by_key[target.key].id, []).append((target, level))  # type: ignore[index]
                 if auto_update_applies(target):
                     auto.append((target, level))
         at_risk: list[tuple[UpdateTarget, int | None]] = []
         for target in running:
-            bad, level = _turned_bad(target, by_key, before, max_level)
+            bad, level = _turned_bad(target, by_key, before, resolve(target).max_risk_level)
             if bad:
                 at_risk.append((target, level))
 
@@ -337,7 +439,7 @@ async def notify_rating_changes(
                     "target_name": names if len(items) <= 10 else f"{names}, …",
                     "version": target.target_version or "",
                     "risk_level": str(level),
-                    "max_risk_level": str(max_level),
+                    "max_risk_level": str(resolve(target).max_risk_level),
                     "details": details,
                 },
             )
@@ -350,7 +452,7 @@ async def notify_rating_changes(
                     "target_name": target.label,
                     "version": target.target_version or "",
                     "risk_level": str(level),
-                    "max_risk_level": str(max_level),
+                    "max_risk_level": str(resolve(target).max_risk_level),
                     "schedule": target.console.auto_update_schedule or "",
                     "details": details,
                 },
@@ -366,7 +468,7 @@ async def notify_rating_changes(
                     "target_name": names if len(at_risk) <= 10 else f"{names}, …",
                     "version": at_risk[0][0].target_version or "",
                     "risk_level": str(max(level or 0 for _t, level in at_risk)),
-                    "max_risk_level": str(max_level),
+                    "max_risk_level": str(resolve(at_risk[0][0]).max_risk_level),
                     "count": str(len(at_risk)),
                     "details": details,
                 },
@@ -377,8 +479,8 @@ async def notify_rating_changes(
 @celery_app.task(
     name="app.tasks.release_jobs.assess_release", time_limit=ASSESSMENT_TIME_LIMIT_SECONDS
 )
-def assess_release(release_id: str) -> dict[str, Any]:
-    return asyncio.run(_assess_release(release_id))
+def assess_release(release_id: str, force: bool = False) -> dict[str, Any]:
+    return asyncio.run(_assess_release(release_id, force))
 
 
 async def _reassess_releases(now: datetime | None = None) -> int:
@@ -412,16 +514,26 @@ async def _reassess_releases(now: datetime | None = None) -> int:
         if not candidates:
             return 0
         pending: set[tuple[str, str, str]] = set()
-        fabric_ids = (
-            await session.execute(select(Fabric.id).where(Fabric.is_enabled.is_(True)))
+        enabled = (
+            await session.execute(select(Fabric).where(Fabric.is_enabled.is_(True)))
         ).scalars()
-        for fabric_id in list(fabric_ids):
-            consoles = await load_consoles(session, fabric_id)
+        for fabric in list(enabled):
+            consoles = await load_consoles(session, fabric.id)
             latest = await load_latest(session, installed_keys(consoles))
-            pending.update(t.key for t in update_targets(consoles, latest) if t.key is not None)
-            pending.update(t.key for t in installed_targets(consoles) if t.key is not None)
-        # The Releases page's catalogue is rated even with nothing pending.
-        for group in await catalog(session):
+            targets = [*update_targets(consoles, latest), *installed_targets(consoles)]
+            resolve = policy_for(fabric, app_settings)
+            releases = await load_releases(session, targets)
+            pending.update(
+                t.key
+                for t in targets
+                if t.key is not None
+                and not (t.key in releases and resolve(t).hides(releases[t.key].stage))
+            )
+        # The Releases page's catalogue is rated even with nothing pending
+        # (what it shows: the globally hidden stages are left out).
+        for group in await catalog(
+            session, hidden_stages=global_policy(app_settings).hidden_stages
+        ):
             pending.update((r.kind, r.product, r.version) for r in group.all_rows)
         # One re-assessment per community post: the models on a firmware
         # line share it (`share_rating`).
@@ -454,8 +566,11 @@ async def _refresh_release_catalog() -> dict[str, Any]:
     async with db_session.AsyncSessionLocal() as session:
         rows = await refresh_catalog(session)
         app_settings = await get_or_create_app_settings(session)
+        hidden = global_policy(app_settings)
         to_assess = (
-            claim_unrated(rows) if await assessment_model(session, app_settings) else []
+            claim_unrated(r for r in rows if not hidden.hides(r.stage))
+            if await assessment_model(session, app_settings)
+            else []
         )
         await session.commit()
     for release_id in to_assess:

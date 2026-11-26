@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "partials/_policy.html" import risk_field, stages_field with context %}
+
+{% block title %}{{ t(request, "policy.title", name=name) }} — ucc{% endblock %}
+
+{% block content %}
+  <h1>{{ t(request, "policy.title", name=name) }}</h1>
+  <p class="hint">
+    <a href="/fabrics/{{ fabric.id }}">{{ fabric.name }}</a> ·
+    {{ t(request, "policy.scope." ~ kind) }}
+  </p>
+
+  {% if errors %}
+    <div class="alert alert-error">{% for error in errors %}<p>{{ error }}</p>{% endfor %}</div>
+  {% endif %}
+
+  <form method="post" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {{ risk_field(owner.max_acceptable_risk_level, inherited) }}
+    <p class="hint">{{ t(request, "policy.risk_hint") }}</p>
+    {{ stages_field(owner.hidden_release_stages, inherited) }}
+    <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+    <a class="button button-secondary" href="/fabrics/{{ fabric.id }}">{{ t(request, "common.cancel") }}</a>
+  </form>
+{% endblock %}

@@ -1,6 +1,6 @@
 """The Site Manager client's parsing/pagination and the inventory sync.
 
-No network: the client runs against an `httpx.MockTransport`, and the sync
+No network: the client runs against an `httpx2.MockTransport`, and the sync
 is exercised through `apply_inventory` with hand-built inventories.
 """
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -112,15 +112,15 @@ def test_parse_site_and_devices():
 
 
 async def test_client_follows_next_token_pagination_and_sends_the_key():
-    seen: list[httpx.Request] = []
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         if "nextToken" not in request.url.params:
-            return httpx.Response(200, json={"data": [_HOST], "nextToken": "p2"})
-        return httpx.Response(200, json={"data": [{**_HOST, "id": "second"}]})
+            return httpx2.Response(200, json={"data": [_HOST], "nextToken": "p2"})
+        return httpx2.Response(200, json={"data": [{**_HOST, "id": "second"}]})
 
-    async with SiteManagerClient("my-key", transport=httpx.MockTransport(handler)) as client:
+    async with SiteManagerClient("my-key", transport=httpx2.MockTransport(handler)) as client:
         hosts = await client.hosts()
 
     assert [h.host_id for h in hosts] == ["70A7:123", "second"]
@@ -129,7 +129,7 @@ async def test_client_follows_next_token_pagination_and_sends_the_key():
 
 
 async def test_client_raises_with_the_http_status():
-    transport = httpx.MockTransport(lambda r: httpx.Response(401, json={"message": "bad"}))
+    transport = httpx2.MockTransport(lambda r: httpx2.Response(401, json={"message": "bad"}))
     async with SiteManagerClient("bad", transport=transport) as client:
         with pytest.raises(SiteManagerError) as exc_info:
             await client.hosts()

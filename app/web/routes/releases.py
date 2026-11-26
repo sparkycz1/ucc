@@ -12,8 +12,10 @@
 - `fabric.view`: all of the above (only the pending updates in Fabrics the
   account may see are listed with a release), and any version's
   release-notes link.
-- `release.manage`: refresh the catalogue now, ask for a re-assessment, set or clear a manual risk
-  level (it replaces the AI's in every verdict).
+- `release.manage`: refresh the catalogue now, ask for a re-assessment (of
+  one release, or of every release with a pending update the account can
+  see — "Assess all"), set or clear a manual risk level (it replaces the
+  AI's in every verdict).
 - `update.override`: allow a release whatever its risk level (every
   pending update to it becomes GO), or withdraw that.
 
@@ -39,6 +41,7 @@ from app.core.app_settings import get_or_create_app_settings
 from app.core.csrf import verify_csrf
 from app.db.models.console import Console, ConsoleApp
 from app.db.models.device import Device
+from app.db.models.fabric import Fabric
 from app.db.models.release import (
     MAX_RISK_LEVEL,
     MIN_RISK_LEVEL,
@@ -52,6 +55,7 @@ from app.db.session import get_db
 from app.releases.context import CATEGORIES
 from app.releases.evidence import SourceError
 from app.releases.history import rating_history, record_rating
+from app.releases.policy import STAGES, global_policy
 from app.releases.products import community_search_url, version_key
 from app.releases.service import (
     assessment_model,
@@ -61,7 +65,7 @@ from app.releases.service import (
     visible_verdicts,
 )
 from app.releases.sources.community import SITE_URL, CommunityClient
-from app.releases.verdicts import TargetSource
+from app.releases.verdicts import TargetSource, TargetVerdict
 from app.releases.versions import normalize_version
 from app.services.access_scope import fabrics_visible_to
 from app.tasks.release_jobs import assess_release, refresh_release_catalog
@@ -123,19 +127,21 @@ async def release_catalog(
             )
         ).all():
             count(ReleaseKind.FIRMWARE.value, model, version)
-    groups = await catalog(db, visible_ids)
+    app_settings = await get_or_create_app_settings(db)
+    hidden = global_policy(app_settings).hidden_stages
+    groups = await catalog(db, visible_ids, hidden_stages=hidden)
     # Per shown row: how many run it, over every model on the line.
     running = {
         release.id: sum(installed.get((group.kind, p, release.version), 0) for p in group.products)
         for group in groups
         for release in group.releases
     }
-    app_settings = await get_or_create_app_settings(db)
     return templates.TemplateResponse(
         request,
         "releases/catalog.html",
         {
             "catalog": groups,
+            "hidden_stages": [s for s in STAGES if s in hidden],
             "running": running,
             "model_names": await model_names(db),
             "max_risk_level": app_settings.max_acceptable_risk_level,
@@ -171,9 +177,12 @@ async def list_assessments(
     counts: dict[uuid.UUID, dict[str, int]] = {}
     # The installed versions each release would replace — "6.0.11 → 6.0.17".
     current: dict[uuid.UUID, set[str]] = {}
-    for _fabric, verdict in pending:
+    # The consoles and devices waiting for each release, for the list.
+    waiting: dict[uuid.UUID, list[tuple[Fabric, TargetVerdict]]] = {}
+    for fabric, verdict in pending:
         if verdict.release is None:
             continue
+        waiting.setdefault(verdict.release.id, []).append((fabric, verdict))
         bucket = counts.setdefault(verdict.release.id, {"targets": 0, "stop": 0})
         bucket["targets"] += 1
         if verdict.verdict == "stop":
@@ -187,6 +196,10 @@ async def list_assessments(
         query = query.where(Release.id.in_(list(counts)))
     releases = list((await db.execute(query.limit(500))).scalars().all())
     app_settings = await get_or_create_app_settings(db)
+    hidden = global_policy(app_settings)
+    # "All" leaves out the globally hidden stages too, unless something
+    # here still shows it (a Fabric or device overriding the setting).
+    releases = [r for r in releases if r.id in counts or not hidden.hides(r.stage)]
     return templates.TemplateResponse(
         request,
         "assessments/list.html",
@@ -198,6 +211,11 @@ async def list_assessments(
                 for release_id, versions in current.items()
             },
             "show_all": show_all,
+            "waiting": {
+                release_id: sorted(items, key=lambda item: (item[0].name, item[1].target.label))
+                for release_id, items in waiting.items()
+            },
+            "csrf_token": request.state.csrf_token,
             "max_risk_level": app_settings.max_acceptable_risk_level,
             "assessment_configured": await assessment_model(db, app_settings) is not None,
             "unknown_count": sum(1 for _f, v in pending if v.target.target_version is None),
@@ -321,7 +339,8 @@ async def request_assessment(
         )
     release.assessment_queued_at = datetime.now(UTC)
     await db.commit()
-    assess_release.delay(str(release.id))
+    # Asked for by a person: rated even when its stage is hidden.
+    assess_release.delay(str(release.id), True)
     await log_event(
         db,
         request=request,
@@ -332,6 +351,52 @@ async def request_assessment(
         target_label=_label(release),
     )
     return _back(release, queued="1")
+
+
+@assessments_router.post("/assess-all", dependencies=[_manage, Depends(verify_csrf)])
+async def assess_all(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """Re-assess now every release with a pending update the account can
+    see — one assessment per community post (the models on a firmware line
+    share it). Each costs tokens; the page says so before the click."""
+    app_settings = await get_or_create_app_settings(db)
+    if await assessment_model(db, app_settings) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Release assessment is not configured (Settings → AI).",
+        )
+    now = datetime.now(UTC)
+    ids: list[str] = []
+    posts: set[tuple[str, str]] = set()
+    seen: set[uuid.UUID] = set()
+    for _fabric, verdict in await visible_verdicts(db, user):
+        release = verdict.release
+        if release is None or release.id in seen:
+            continue
+        seen.add(release.id)
+        if release.community_release_id:
+            post = (release.kind, release.community_release_id)
+            if post in posts:
+                continue
+            posts.add(post)
+        release.assessment_queued_at = now
+        ids.append(str(release.id))
+    await db.commit()
+    for release_id in ids:
+        assess_release.delay(release_id, True)
+    await log_event(
+        db,
+        request=request,
+        action="release.assess.request_all",
+        summary=f"Requested an AI assessment of {len(ids)} releases with pending updates",
+        details={"releases": len(ids)},
+    )
+    return RedirectResponse(
+        url=f"/assessments?queued={len(ids)}", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @router.post("/{release_id}/risk", dependencies=[_manage, Depends(verify_csrf)])

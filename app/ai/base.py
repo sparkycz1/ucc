@@ -106,6 +106,10 @@ class BaseAiClient(abc.ABC):
 
     #: For audit/usage records and error messages.
     kind_value: str
+    #: How long one `send` may take (`AiProviderConfig.timeout_seconds`,
+    #: set by `build_client`); past it the call fails like any provider
+    #: error, and the fallback model, if any, is tried.
+    chat_timeout: float = 90.0
 
     @abc.abstractmethod
     async def list_models(self) -> list[ModelInfo]:

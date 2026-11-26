@@ -5,8 +5,34 @@
       <a href="/ai">{{ t(request, "nav.ai") }}</a>{{ t(request, "settings.ai.intro_after") }}
     </p>
 
+    <h3>{{ t(request, "settings.ai.choice_title") }}</h3>
+    <p class="hint">{{ t(request, "settings.ai.choice_hint") }}</p>
+    {% if selectable_models %}
+      <form method="post" action="/settings/ai/model-choice" class="form" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="primary_model_id">{{ t(request, "settings.ai.primary") }}</label>
+        <select id="primary_model_id" name="primary_model_id">
+          <option value="">{{ t(request, "settings.releases.model_off") }}</option>
+          {% for config, model in selectable_models %}
+            <option value="{{ model.id }}" {{ 'selected' if app_settings.release_assessment_model_id == model.id else '' }}>{{ config.kind.value }} — {{ model.model_id }}</option>
+          {% endfor %}
+        </select>
+        <label for="fallback_model_id">{{ t(request, "settings.ai.fallback") }}</label>
+        <select id="fallback_model_id" name="fallback_model_id">
+          <option value="">{{ t(request, "settings.ai.fallback_none") }}</option>
+          {% for config, model in selectable_models %}
+            <option value="{{ model.id }}" {{ 'selected' if app_settings.ai_fallback_model_id == model.id else '' }}>{{ config.kind.value }} — {{ model.model_id }}</option>
+          {% endfor %}
+        </select>
+        <p class="hint">{{ t(request, "settings.ai.fallback_hint") }}</p>
+        <button type="submit" class="button">{{ t(request, "common.save") }}</button>
+      </form>
+    {% else %}
+      <p class="hint">{{ t(request, "settings.ai.choice_none") }}</p>
+    {% endif %}
+
     {% for config in ai_configs %}
-      {% if not loop.first %}<hr>{% endif %}
+      <hr>
       <h3>{{ config.kind.value }}</h3>
       <form method="post" action="/settings/ai/provider" class="form" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -22,6 +48,12 @@
                autocomplete="new-password"
                placeholder="{{ t(request, 'settings.integrations.unchanged') if config.api_key_encrypted else '' }}">
         <p class="hint">{{ t(request, "settings.integrations.leave_blank_hint") }}</p>
+
+        <label for="timeout_{{ config.kind.value }}">{{ t(request, "settings.ai.timeout") }}</label>
+        <input type="number" id="timeout_{{ config.kind.value }}" name="timeout_seconds"
+               min="{{ ai_timeout_range[0] }}" max="{{ ai_timeout_range[1] }}" step="1"
+               value="{{ config.timeout_seconds }}">
+        <p class="hint">{{ t(request, "settings.ai.timeout_hint", min=ai_timeout_range[0], max=ai_timeout_range[1]) }}</p>
 
         {% if config.kind.value == openai_compatible_kind %}
           <label for="base_url_{{ config.kind.value }}">{{ t(request, "settings.ai.base_url") }}</label>
@@ -124,4 +156,63 @@
       <button type="submit" class="button">{{ t(request, "common.save") }}</button>
     </form>
 
+    <hr>
+    <h3 id="ai-usage">{{ t(request, "settings.ai.usage_title") }}</h3>
+    <p class="hint">{{ t(request, "settings.ai.usage_hint") }}</p>
+    <div class="stat-grid">
+      {% for name in ('24h', '7d', '30d') %}
+        {% set w = ai_usage.windows[name] %}
+        <div class="stat-card">
+          <div class="stat-label">{{ t(request, "settings.ai.usage_window." ~ name) }}</div>
+          <div class="stat-value">{{ "{:,}".format(w.tokens).replace(",", " ") }}</div>
+          <div class="hint">{{ t(request, "settings.ai.usage_calls", calls=w.calls, input=w.input_tokens, output=w.output_tokens) }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% if ai_usage.by_model %}
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>{{ t(request, "settings.ai.usage_model") }}</th>
+            <th>{{ t(request, "settings.ai.usage_calls_col") }}</th>
+            <th>{{ t(request, "settings.ai.usage_tokens") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for label, w in ai_usage.by_model %}
+            <tr><td>{{ label }}</td><td>{{ w.calls }}</td><td>{{ "{:,}".format(w.tokens).replace(",", " ") }}</td></tr>
+          {% endfor %}
+          {% for purpose, w in ai_usage.by_purpose %}
+            <tr class="subtle-row"><td>{{ t(request, "settings.ai.purpose." ~ (purpose or "other")) }}</td><td>{{ w.calls }}</td><td>{{ "{:,}".format(w.tokens).replace(",", " ") }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {% if ai_usage.recent %}
+      <h4>{{ t(request, "settings.ai.usage_recent") }}</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>{{ t(request, "releases.history.when") }}</th>
+            <th>{{ t(request, "settings.ai.usage_purpose") }}</th>
+            <th>{{ t(request, "settings.ai.usage_model") }}</th>
+            <th>{{ t(request, "settings.ai.usage_tokens") }}</th>
+            <th>{{ t(request, "settings.ai.usage_duration") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in ai_usage.recent %}
+            <tr>
+              <td class="nowrap">{{ row.created_at | local_time('%Y-%m-%d %H:%M') }}</td>
+              <td>{{ t(request, "settings.ai.purpose." ~ (row.purpose or "other")) }}{% if row.label %} <span class="hint">· {{ row.label }}</span>{% endif %}</td>
+              <td>{{ row.provider_kind.value }}/{{ row.model_id }}{% if row.fallback %} <span class="badge badge-warn" title="{{ t(request, 'settings.ai.fallback_used_hint') }}">{{ t(request, "settings.ai.fallback_used") }}</span>{% endif %}</td>
+              <td class="nowrap" title="{{ t(request, 'settings.ai.usage_in_out', input=row.input_tokens, output=row.output_tokens) }}">{{ "{:,}".format(row.input_tokens + row.output_tokens).replace(",", " ") }}</td>
+              <td class="nowrap">{% if row.duration_ms is not none %}{{ "%.1f" | format(row.duration_ms / 1000) }} s{% else %}—{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
   </section>

@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 
 from app.db.models.app_settings import WebSearchKind
 from app.releases.evidence import Evidence, EvidenceItem, SourceError
@@ -85,12 +85,12 @@ class WebSearchClient:
         *,
         url: str | None = None,
         api_key: str | None = None,
-        http: httpx.AsyncClient | None = None,
+        http: httpx2.AsyncClient | None = None,
     ) -> None:
         self._kind = kind
         self._url = (url or "").rstrip("/")
         self._api_key = api_key
-        self._http = http or httpx.AsyncClient(
+        self._http = http or httpx2.AsyncClient(
             timeout=TIMEOUT_SECONDS, headers={"user-agent": USER_AGENT}
         )
 
@@ -115,7 +115,7 @@ class WebSearchClient:
                 )
             else:
                 return []
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise SourceError(f"Web search: {exc.__class__.__name__}") from exc
         if response.status_code != 200:
             raise SourceError(f"Web search: HTTP {response.status_code}")

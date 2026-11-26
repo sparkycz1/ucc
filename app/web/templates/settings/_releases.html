@@ -1,3 +1,4 @@
+{% from "partials/_policy.html" import stages_field with context %}
   <section class="panel">
     <h2>{{ t(request, "settings.releases.title") }}</h2>
     <p class="hint">{{ t(request, "settings.releases.intro") }}</p>
@@ -13,14 +14,9 @@
       </select>
       <p class="hint">{{ t(request, "settings.releases.max_risk_hint") }}</p>
 
-      <label for="release_assessment_model_id">{{ t(request, "settings.releases.model") }}</label>
-      <select id="release_assessment_model_id" name="release_assessment_model_id">
-        <option value="">{{ t(request, "settings.releases.model_off") }}</option>
-        {% for config, model in selectable_models %}
-          <option value="{{ model.id }}" {{ 'selected' if app_settings.release_assessment_model_id == model.id else '' }}>{{ config.kind.value }} — {{ model.model_id }}</option>
-        {% endfor %}
-      </select>
-      <p class="hint">{{ t(request, "settings.releases.model_hint") }}</p>
+      <p class="hint">{{ t(request, "settings.releases.model_moved") }} <a href="/settings?tab=ai">{{ t(request, "settings.releases.model_moved_link") }}</a></p>
+
+      {{ stages_field(app_settings.hidden_release_stages, global_policy, false) }}
 
       <h3>{{ t(request, "settings.releases.sources") }}</h3>
       <p class="hint">{{ t(request, "settings.releases.community_hint") }}</p>

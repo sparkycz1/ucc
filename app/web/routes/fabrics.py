@@ -36,6 +36,14 @@ from app.db.models.release import ReleaseKind
 from app.db.models.role import Permission
 from app.db.models.user import User
 from app.db.session import get_db
+from app.releases.policy import (
+    console_policy,
+    device_policy,
+    fabric_policy,
+    global_policy,
+    risk_from_form,
+    stages_from_form,
+)
 from app.releases.verdicts import (
     TargetVerdict,
     Verdict,
@@ -44,7 +52,7 @@ from app.releases.verdicts import (
     installed_targets,
     load_latest,
     load_releases,
-    max_risk_for,
+    policy_for,
     update_targets,
     verdicts,
 )
@@ -87,10 +95,15 @@ def _form_from_request(raw: dict[str, str]) -> dict[str, object]:
         "api_key": raw.get("api_key", ""),
         "is_enabled": bool(raw.get("is_enabled")),
         "max_acceptable_risk_level": (raw.get("max_acceptable_risk_level") or "").strip() or None,
+        "hidden_release_stages": stages_from_form(raw),
+        "inventory_sync_interval_seconds": (
+            (raw.get("inventory_sync_interval_seconds") or "").strip() or None
+        ),
     }
 
 
-def _render_form(
+async def _render_form(
+    db: AsyncSession,
     request: Request,
     template: str,
     *,
@@ -102,10 +115,18 @@ def _render_form(
     csrf_token, new_cookie = get_or_create_csrf_token(request)
     # The API key is never echoed back, even after a failed submit.
     safe_form = {k: v for k, v in form.items() if k != "api_key"}
+    app_settings = await get_or_create_app_settings(db)
     response = templates.TemplateResponse(
         request,
         template,
-        {"form": safe_form, "errors": errors, "fabric": fabric, "csrf_token": csrf_token},
+        {
+            "form": safe_form,
+            "errors": errors,
+            "fabric": fabric,
+            "csrf_token": csrf_token,
+            "inherited": global_policy(app_settings),
+            "global_sync_interval": app_settings.inventory_sync_interval_seconds,
+        },
         status_code=status_code,
     )
     if new_cookie:
@@ -139,11 +160,17 @@ async def list_fabrics(
 
 
 @router.get("/new", dependencies=[_manage])
-async def new_fabric_form(request: Request) -> Response:
-    return _render_form(
+async def new_fabric_form(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    return await _render_form(
+        db,
         request,
         "fabrics/new.html",
-        form={"is_enabled": True, "max_acceptable_risk_level": None},
+        form={
+            "is_enabled": True,
+            "max_acceptable_risk_level": None,
+            "hidden_release_stages": None,
+            "inventory_sync_interval_seconds": None,
+        },
         errors=[],
     )
 
@@ -156,7 +183,8 @@ async def create_fabric(request: Request, db: AsyncSession = Depends(get_db)) ->
         payload = FabricForm.model_validate(form)
     except ValidationError as exc:
         errors = [str(e["msg"]) for e in exc.errors()]
-        return _render_form(
+        return await _render_form(
+            db,
             request,
             "fabrics/new.html",
             form=form,
@@ -164,7 +192,8 @@ async def create_fabric(request: Request, db: AsyncSession = Depends(get_db)) ->
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
     if not payload.api_key:
-        return _render_form(
+        return await _render_form(
+            db,
             request,
             "fabrics/new.html",
             form=form,
@@ -181,7 +210,8 @@ async def create_fabric(request: Request, db: AsyncSession = Depends(get_db)) ->
             summary=f'Rejected new Fabric "{payload.name}": {key_error}',
             outcome=AuditOutcome.FAILURE,
         )
-        return _render_form(
+        return await _render_form(
+            db,
             request,
             "fabrics/new.html",
             form=form,
@@ -195,6 +225,8 @@ async def create_fabric(request: Request, db: AsyncSession = Depends(get_db)) ->
         api_key_encrypted=encrypt_secret(payload.api_key),
         is_enabled=payload.is_enabled,
         max_acceptable_risk_level=payload.max_acceptable_risk_level,
+        hidden_release_stages=payload.hidden_release_stages,
+        inventory_sync_interval_seconds=payload.inventory_sync_interval_seconds,
     )
     db.add(fabric)
     try:
@@ -208,7 +240,8 @@ async def create_fabric(request: Request, db: AsyncSession = Depends(get_db)) ->
             summary=f'Rejected new Fabric "{payload.name}": the name already exists',
             outcome=AuditOutcome.FAILURE,
         )
-        return _render_form(
+        return await _render_form(
+            db,
             request,
             "fabrics/new.html",
             form=form,
@@ -236,7 +269,7 @@ async def _inventory_context(db: AsyncSession, fabric: Fabric) -> dict[str, obje
     `("app", console_id, app_name)`, `("device", device_id)`."""
     consoles = await _load_inventory(db, fabric)
     app_settings = await get_or_create_app_settings(db)
-    max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
+    resolve = policy_for(fabric, app_settings)
     latest = await load_latest(db, installed_keys(consoles))
     targets = update_targets(consoles, latest)
     running = installed_targets(consoles)
@@ -244,19 +277,22 @@ async def _inventory_context(db: AsyncSession, fabric: Fabric) -> dict[str, obje
     by_key: dict[tuple[object, ...], TargetVerdict] = {}
     # UniFi's own auto-update would install these STOP updates anyway.
     auto_update_risks: dict[object, list[TargetVerdict]] = {}
-    for verdict in verdicts(targets, releases, max_level):
+    for verdict in verdicts(targets, releases, resolve):
         by_key[_row_key(verdict)] = verdict
         if verdict.verdict == Verdict.STOP and auto_update_applies(verdict.target):
             auto_update_risks.setdefault(verdict.target.console.id, []).append(verdict)
-    installed_by_key = {_row_key(v): v for v in verdicts(running, releases, max_level)}
+    installed_by_key = {_row_key(v): v for v in verdicts(running, releases, resolve)}
     return {
         "fabric": fabric,
         "consoles": consoles,
         "verdicts": by_key,
         "installed": installed_by_key,
         "auto_update_risks": auto_update_risks,
-        "max_risk_level": max_level,
-        "fabric_overrides_risk": fabric.max_acceptable_risk_level is not None,
+        "fabric_policy": fabric_policy(fabric, app_settings),
+        "console_policies": {c.id: console_policy(c, fabric, app_settings) for c in consoles},
+        "device_policies": {
+            d.id: device_policy(d, fabric, app_settings) for c in consoles for d in c.devices
+        },
     }
 
 
@@ -355,7 +391,8 @@ async def edit_fabric_form(
     user: User = Depends(get_current_user),
 ) -> Response:
     fabric = await _get_fabric_or_404(db, user, fabric_id)
-    return _render_form(
+    return await _render_form(
+        db,
         request,
         "fabrics/edit.html",
         form={
@@ -363,6 +400,8 @@ async def edit_fabric_form(
             "description": fabric.description,
             "is_enabled": fabric.is_enabled,
             "max_acceptable_risk_level": fabric.max_acceptable_risk_level,
+            "hidden_release_stages": fabric.hidden_release_stages,
+            "inventory_sync_interval_seconds": fabric.inventory_sync_interval_seconds,
         },
         errors=[],
         fabric=fabric,
@@ -382,7 +421,8 @@ async def update_fabric(
     try:
         payload = FabricForm.model_validate(form)
     except ValidationError as exc:
-        return _render_form(
+        return await _render_form(
+            db,
             request,
             "fabrics/edit.html",
             form=form,
@@ -405,7 +445,8 @@ async def update_fabric(
                 target_id=fabric.id,
                 target_label=fabric.name,
             )
-            return _render_form(
+            return await _render_form(
+                db,
                 request,
                 "fabrics/edit.html",
                 form=form,
@@ -421,11 +462,14 @@ async def update_fabric(
     fabric.description = payload.description
     fabric.is_enabled = payload.is_enabled
     fabric.max_acceptable_risk_level = payload.max_acceptable_risk_level
+    fabric.hidden_release_stages = payload.hidden_release_stages
+    fabric.inventory_sync_interval_seconds = payload.inventory_sync_interval_seconds
     try:
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        return _render_form(
+        return await _render_form(
+            db,
             request,
             "fabrics/edit.html",
             form=form,
@@ -448,6 +492,8 @@ async def update_fabric(
             "api_key_replaced": key_replaced,
             "is_enabled": fabric.is_enabled,
             "max_acceptable_risk_level": fabric.max_acceptable_risk_level,
+            "hidden_release_stages": fabric.hidden_release_stages,
+            "inventory_sync_interval_seconds": fabric.inventory_sync_interval_seconds,
         },
     )
     if key_replaced and fabric.is_enabled:
@@ -476,3 +522,139 @@ async def delete_fabric(
         target_label=name,
     )
     return RedirectResponse(url="/fabrics", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- A console's or device's own settings (`app.releases.policy`) ---
+
+
+async def _console_or_404(db: AsyncSession, fabric: Fabric, console_id: uuid.UUID) -> Console:
+    console = await db.get(Console, console_id)
+    if console is None or console.fabric_id != fabric.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Console not found.")
+    return console
+
+
+async def _device_or_404(db: AsyncSession, fabric: Fabric, device_id: uuid.UUID) -> Device:
+    device = await db.get(Device, device_id)
+    console = await db.get(Console, device.console_id) if device is not None else None
+    if device is None or console is None or console.fabric_id != fabric.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found.")
+    return device
+
+
+async def _target_settings(
+    request: Request,
+    db: AsyncSession,
+    user: User,
+    fabric_id: uuid.UUID,
+    kind: str,
+    owner_id: uuid.UUID,
+) -> Response:
+    """GET and POST of the settings page of one console (`kind="console"`)
+    or device — the same form, inheriting from the Fabric."""
+    fabric = await _get_fabric_or_404(db, user, fabric_id)
+    owner: Console | Device
+    if kind == "console":
+        owner = await _console_or_404(db, fabric, owner_id)
+        name = owner.name or owner.host_id
+    else:
+        owner = await _device_or_404(db, fabric, owner_id)
+        name = owner.name or owner.mac
+    app_settings = await get_or_create_app_settings(db)
+    inherited = fabric_policy(fabric, app_settings)
+    errors: list[str] = []
+    if request.method == "POST":
+        raw = {key: str(value) for key, value in (await request.form()).items()}
+        try:
+            level = risk_from_form(raw)
+        except ValueError:
+            errors.append("The acceptable risk level must be 1–5 or inherited.")
+        else:
+            owner.max_acceptable_risk_level = level
+            owner.hidden_release_stages = stages_from_form(raw)
+            await db.commit()
+            await log_event(
+                db,
+                request=request,
+                action=f"{kind}.settings.update",
+                summary=f'Updated the settings of {kind} "{name}" in Fabric "{fabric.name}"',
+                target_type=kind,
+                target_id=owner.id,
+                target_label=name,
+                details={
+                    "fabric": fabric.name,
+                    "max_acceptable_risk_level": owner.max_acceptable_risk_level,
+                    "hidden_release_stages": owner.hidden_release_stages,
+                },
+            )
+            return RedirectResponse(
+                url=f"/fabrics/{fabric.id}", status_code=status.HTTP_303_SEE_OTHER
+            )
+    csrf_token, new_cookie = get_or_create_csrf_token(request)
+    response = templates.TemplateResponse(
+        request,
+        "fabrics/target_settings.html",
+        {
+            "fabric": fabric,
+            "owner": owner,
+            "name": name,
+            "kind": kind,
+            "inherited": inherited,
+            "errors": errors,
+            "csrf_token": csrf_token,
+        },
+        status_code=(
+            status.HTTP_422_UNPROCESSABLE_CONTENT if errors else status.HTTP_200_OK
+        ),
+    )
+    if new_cookie:
+        set_csrf_cookie(response, new_cookie)
+    return response
+
+
+@router.get("/{fabric_id}/consoles/{console_id}/settings", dependencies=[_manage])
+async def console_settings_form(
+    request: Request,
+    fabric_id: uuid.UUID,
+    console_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    return await _target_settings(request, db, user, fabric_id, "console", console_id)
+
+
+@router.post(
+    "/{fabric_id}/consoles/{console_id}/settings", dependencies=[_manage, Depends(verify_csrf)]
+)
+async def update_console_settings(
+    request: Request,
+    fabric_id: uuid.UUID,
+    console_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    return await _target_settings(request, db, user, fabric_id, "console", console_id)
+
+
+@router.get("/{fabric_id}/devices/{device_id}/settings", dependencies=[_manage])
+async def device_settings_form(
+    request: Request,
+    fabric_id: uuid.UUID,
+    device_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    return await _target_settings(request, db, user, fabric_id, "device", device_id)
+
+
+@router.post(
+    "/{fabric_id}/devices/{device_id}/settings", dependencies=[_manage, Depends(verify_csrf)]
+)
+async def update_device_settings(
+    request: Request,
+    fabric_id: uuid.UUID,
+    device_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    return await _target_settings(request, db, user, fabric_id, "device", device_id)

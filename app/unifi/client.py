@@ -16,10 +16,10 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
+import httpx2
 
 BASE_URL = "https://api.ui.com"
-_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+_TIMEOUT = httpx2.Timeout(30.0, connect=10.0)
 
 
 class SiteManagerError(Exception):
@@ -215,9 +215,9 @@ class SiteManagerClient:
         api_key: str,
         *,
         base_url: str = BASE_URL,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        self._client = httpx.AsyncClient(
+        self._client = httpx2.AsyncClient(
             base_url=base_url,
             timeout=_TIMEOUT,
             transport=transport,
@@ -240,7 +240,7 @@ class SiteManagerClient:
     ) -> Any:
         try:
             response = await self._client.request(method, path, params=params, json=json)
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise SiteManagerError(f"{method} {path}: {exc}") from exc
         if response.status_code >= 400:
             raise SiteManagerError(

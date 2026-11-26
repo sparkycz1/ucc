@@ -1,0 +1,42 @@
+{# The release policy fields (`app.releases.policy`) shared by the global
+   settings, a Fabric's form and a console's or device's settings page.
+   `own` is the stored override (None = inherit), `inherited` the policy
+   it would otherwise get; `inherit_allowed` is false on the global form. #}
+{% from "partials/_release.html" import stage_badge with context %}
+
+{% macro risk_field(own, inherited, inherit_allowed=true) -%}
+  <label for="max_acceptable_risk_level">{{ t(request, "fabrics.form.max_risk") }}</label>
+  <select id="max_acceptable_risk_level" name="max_acceptable_risk_level">
+    {% if inherit_allowed %}
+      <option value="" {{ 'selected' if own is none else '' }}>{{ t(request, "policy.inherit_level", level=inherited.max_risk_level, source=t(request, "policy.from." ~ inherited.risk_from)) }}</option>
+    {% endif %}
+    {% for level in range(1, 6) %}
+      <option value="{{ level }}" {{ 'selected' if own == level else '' }}>{{ level }} — {{ t(request, "releases.risk." ~ level) }}</option>
+    {% endfor %}
+  </select>
+{%- endmacro %}
+
+{% macro stages_field(own, inherited, inherit_allowed=true) -%}
+  <fieldset class="stage-fieldset">
+    <legend>{{ t(request, "policy.hidden_stages") }}</legend>
+    <p class="hint">{{ t(request, "policy.hidden_stages_hint") }}</p>
+    {% if inherit_allowed %}
+      <label class="inline-check">
+        <input type="radio" name="stages_mode" value="inherit" {{ 'checked' if own is none else '' }}>
+        {{ t(request, "policy.inherit_stages", source=t(request, "policy.from." ~ inherited.stages_from)) }}:
+        {% for stage in inherited.hidden_stages | sort %}{{ stage_badge(stage) }} {% else %}{{ t(request, "policy.none") }}{% endfor %}
+      </label>
+      <label class="inline-check">
+        <input type="radio" name="stages_mode" value="own" {{ 'checked' if own is not none else '' }}>
+        {{ t(request, "policy.own_stages") }}
+      </label>
+    {% endif %}
+    {% set current = own if own is not none else inherited.hidden_stages %}
+    {% for stage in ('GA', 'RC', 'T', 'U') %}
+      <label class="inline-check">
+        <input type="checkbox" name="hide_stage_{{ stage }}" value="1" {{ 'checked' if stage in current else '' }}>
+        {{ t(request, "policy.hide") }} {{ stage_badge(stage) }} <span class="hint">{{ t(request, "releases.stage." ~ stage).split(" — ", 1)[-1] }}</span>
+      </label>
+    {% endfor %}
+  </fieldset>
+{%- endmacro %}

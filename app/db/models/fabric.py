@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Integer, LargeBinary, String, Text, func
+from sqlalchemy import JSON, Boolean, Integer, LargeBinary, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -38,6 +38,14 @@ class Fabric(Base):
     # Overrides `AppSettings.max_acceptable_risk_level` for this Fabric's
     # verdicts (`app.releases.verdicts`); NULL = use the global level.
     max_acceptable_risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Release stages hidden for this Fabric ("RC", "T", ...); NULL = use
+    # `AppSettings.hidden_release_stages` (`app.releases.policy`).
+    hidden_release_stages: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Overrides `AppSettings.inventory_sync_interval_seconds`; NULL = global.
+    inventory_sync_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When Beat last enqueued this Fabric's sync — its every-minute tick
+    # enqueues the Fabrics whose interval has passed since (`app.tasks.jobs`).
+    last_sync_attempt_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     last_sync_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # The last sync's error message, cleared on the next successful sync.

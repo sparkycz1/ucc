@@ -10,19 +10,21 @@ days after a release is public.
 The verdict compares the release's risk level *for that console or device*
 (`app.releases.context`: manual if set, else the AI's, lowered when its
 problems are tagged for hardware the console doesn't have) with the
-acceptable level: `Fabric.max_acceptable_risk_level` if the
-Fabric overrides it, else `AppSettings.max_acceptable_risk_level`.
+acceptable level in effect for that console or device
+(`app.releases.policy`: its own, else its Fabric's, else the global one).
+An update to a release in a stage hidden there ("RC", ...) is left out.
 """
 
 from __future__ import annotations
 
 import enum
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.app_settings import AppSettings
 from app.db.models.console import Console
 from app.db.models.device import Device
 from app.db.models.fabric import Fabric
@@ -34,6 +36,7 @@ from app.releases.context import (
     contextual_risk,
     device_profile,
 )
+from app.releases.policy import Policy, console_policy, device_policy
 from app.releases.products import is_newer
 from app.releases.versions import normalize_version
 
@@ -103,6 +106,8 @@ class TargetVerdict:
     max_risk_level: int
     # The release's level for this target (`app.releases.context`).
     risk: ContextualRisk = ContextualRisk(None)
+    # The settings in effect for it (`app.releases.policy`).
+    policy: Policy | None = None
 
 
 def os_product(console: Console) -> str | None:
@@ -257,10 +262,34 @@ async def load_releases(
     return {(r.kind, r.product, r.version): r for r in rows}
 
 
-def max_risk_for(fabric: Fabric, global_level: int) -> int:
-    if fabric.max_acceptable_risk_level is not None:
-        return fabric.max_acceptable_risk_level
-    return global_level
+PolicyFor = Callable[[UpdateTarget], Policy]
+
+
+def policy_for(fabric: Fabric | None, app_settings: AppSettings) -> PolicyFor:
+    """The settings in effect for each target in `fabric`: the device's
+    own for firmware, the console's for its UniFi OS and applications."""
+
+    def resolve(target: UpdateTarget) -> Policy:
+        if target.device is not None:
+            return device_policy(target.device, fabric, app_settings)
+        return console_policy(target.console, fabric, app_settings)
+
+    return resolve
+
+
+def _fixed(level: int) -> PolicyFor:
+    policy = Policy(level, frozenset())
+    return lambda _target: policy
+
+
+def is_hidden(target: UpdateTarget, release: Release | None, policy: Policy) -> bool:
+    """A pending update to a release in a stage hidden for this target.
+    What runs now is never hidden — it is there either way."""
+    return (
+        release is not None
+        and target.source != TargetSource.INSTALLED
+        and policy.hides(release.stage)
+    )
 
 
 def verdict_for(
@@ -281,28 +310,49 @@ def verdict_for(
 def verdicts(
     targets: Iterable[UpdateTarget],
     releases: dict[tuple[str, str, str], Release],
-    max_risk_level: int,
+    policy: int | PolicyFor,
 ) -> list[TargetVerdict]:
+    """A verdict per target, judged by `policy` (a fixed acceptable level,
+    or `policy_for(...)`); updates to a hidden stage are left out."""
+    resolve = _fixed(policy) if isinstance(policy, int) else policy
     out = []
     for target in targets:
+        settings = resolve(target)
+        level = settings.max_risk_level
         key = target.key
         if key is None:
-            out.append(TargetVerdict(target, Verdict.UNKNOWN, None, max_risk_level))
+            out.append(TargetVerdict(target, Verdict.UNKNOWN, None, level, policy=settings))
             continue
         release = releases.get(key)
+        if is_hidden(target, release, settings):
+            continue
         risk = ContextualRisk(None)
         if release is not None:
             risk = contextual_risk(release, target.profile)
         out.append(
             TargetVerdict(
                 target,
-                verdict_for(release, max_risk_level, risk.level),
+                verdict_for(release, level, risk.level),
                 release,
-                max_risk_level,
+                level,
                 risk,
+                settings,
             )
         )
     return out
+
+
+def visible_targets(
+    targets: Iterable[UpdateTarget],
+    releases: dict[tuple[str, str, str], Release],
+    resolve: PolicyFor,
+) -> list[UpdateTarget]:
+    """`targets` without the updates to a stage hidden for them."""
+    return [
+        t
+        for t in targets
+        if t.key is None or not is_hidden(t, releases.get(t.key), resolve(t))
+    ]
 
 
 def auto_update_applies(target: UpdateTarget) -> bool:

@@ -60,8 +60,13 @@ def next_run(
     defaults; Beat reads the configured value at its start)."""
     try:
         if isinstance(schedule, crontab):
-            remaining: timedelta = schedule.remaining_estimate(last_started or now)
-            upcoming = now + remaining
+            # `remaining_delta`, not `remaining_estimate`: the latter measures
+            # from Celery's own clock, not from `now`.
+            start, delta, _ = schedule.remaining_delta(last_started or now)
+            upcoming: datetime = start + delta
+            if upcoming < now:
+                start, delta, _ = schedule.remaining_delta(now)
+                upcoming = start + delta
             # Celery's estimate lands a few seconds short of the minute.
             if upcoming.second or upcoming.microsecond:
                 upcoming = upcoming.replace(second=0, microsecond=0) + timedelta(minutes=1)
@@ -100,7 +105,6 @@ async def status_page(
     app_settings = await get_or_create_app_settings(db)
     runs = {row.name: row for row in (await db.execute(select(JobRun))).scalars()}
     intervals = {
-        "sync-all-fabrics": timedelta(seconds=app_settings.inventory_sync_interval_seconds),
         "refresh-release-catalog": timedelta(hours=app_settings.release_catalog_interval_hours),
     }
     jobs = []

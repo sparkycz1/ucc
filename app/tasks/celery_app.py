@@ -226,9 +226,13 @@ celery_app.conf.update(
 # at startup is sent by `_on_beat_start` below.
 _interval_settings = _bootstrap_interval_settings()
 celery_app.conf.beat_schedule = {
+    # A tick every minute; the task itself enqueues only the Fabrics whose
+    # own interval (`Fabric.inventory_sync_interval_seconds`, else the
+    # global `AppSettings` one) has passed — read fresh on every tick, so
+    # a changed interval applies without restarting Beat.
     "sync-all-fabrics": {
         "task": "app.tasks.jobs.sync_all_fabrics",
-        "schedule": timedelta(seconds=_interval_settings["inventory_sync_interval_seconds"]),
+        "schedule": crontab(),
     },
     # Cron expressions are minute-grained anyway, so a fixed per-minute tick
     # (rather than a configurable interval) is the natural fit for the

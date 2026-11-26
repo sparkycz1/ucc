@@ -28,12 +28,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
 
-from app.ai.base import AiProviderError, ChatTurnResult, ToolCall
+from app.ai.base import AiProviderError, BaseAiClient, ChatTurnResult, ToolCall
+from app.ai.fallback import Candidate, model_chain
 from app.ai.providers import build_client
 from app.ai.tools import (
     MAX_TOOL_ROUNDTRIPS,
@@ -43,11 +46,15 @@ from app.ai.tools import (
     build_pending_action,
     execute_read_only_tool,
 )
-from app.ai.usage import check_within_limits, record_usage
+from app.ai.usage import Purpose, check_within_limits, record_usage
+from app.audit import log_event
 from app.core.app_settings import get_or_create_app_settings
 from app.db import session as db_session
 from app.db.models.ai_conversation import AiConversation
 from app.db.models.ai_message import AiMessage, AiMessageRole
+from app.db.models.ai_model import AiModel
+from app.db.models.ai_provider import AiProviderKind
+from app.db.models.audit_log import AuditOutcome
 from app.db.models.user import User
 from app.tasks.celery_app import celery_app
 
@@ -67,25 +74,63 @@ _NO_TEXT_FALLBACK = (
 )
 
 
-async def _load_history(db: Any, conversation_id: uuid.UUID) -> list[Any]:
-    """Replay every stored provider-native message, oldest first. Each
-    `AiMessage.provider_native` holds the list of native messages that turn
-    contributed (see `app.db.models.ai_message`), so the history is just
-    those lists concatenated — no translation, which is the entire reason
-    they're stored provider-shaped in the first place."""
+_TRANSCRIPT_INTRO = (
+    "(This conversation continues with a different AI model, so its earlier "
+    "turns follow as a plain transcript. Answer the last user message.)"
+)
+
+
+async def _rows(db: Any, conversation_id: uuid.UUID) -> list[AiMessage]:
     result = await db.execute(
         select(AiMessage)
         .where(AiMessage.conversation_id == conversation_id)
         .order_by(AiMessage.created_at, AiMessage.id)
     )
-    messages: list[Any] = []
-    for row in result.scalars().all():
-        native = row.provider_native
-        if isinstance(native, list):
-            messages.extend(native)
-        elif native is not None:
-            messages.append(native)
-    return messages
+    return list(result.scalars().all())
+
+
+async def _load_history(
+    db: Any, conversation: AiConversation, kind: AiProviderKind, client: BaseAiClient
+) -> list[Any]:
+    """The history to send `client` (a provider of `kind`).
+
+    Normally every stored provider-native message, oldest first: each
+    `AiMessage.provider_native` holds the native messages that turn
+    contributed (see `app.db.models.ai_message`), so the history is just
+    those lists concatenated — no translation, which is the reason they're
+    stored provider-shaped in the first place.
+
+    When some of it is in another provider's format (a turn the fallback
+    model answered, or this turn going to the fallback) — or the newest
+    user message has none — it can't be replayed natively, and goes as
+    one plain-text transcript instead (tool calls and their results are
+    left out; the answers that used them are in it)."""
+    rows = await _rows(db, conversation.id)
+    own_kind = conversation.provider.kind if conversation.provider else None
+    last_user = next((r for r in reversed(rows) if r.role == AiMessageRole.USER), None)
+    native_ok = (last_user is None or last_user.provider_native is not None) and all(
+        (row.provider_kind or own_kind) == kind
+        for row in rows
+        if row.provider_native is not None
+    )
+    if native_ok:
+        messages: list[Any] = []
+        for row in rows:
+            native = row.provider_native
+            if isinstance(native, list):
+                messages.extend(native)
+            elif native is not None:
+                messages.append(native)
+        return messages
+    lines = [_TRANSCRIPT_INTRO, ""]
+    for row in rows:
+        if row.role == AiMessageRole.USER:
+            lines.append(f"User: {row.content}")
+        elif row.provider_native is not None and row.content:
+            # Assistant rows without a native payload are errors ucc wrote.
+            lines.append(f"Assistant: {row.content}")
+        lines.append("")
+    return [client.build_user_message("\n".join(lines).strip())]
 
 
 async def _persist_assistant_error(
@@ -109,6 +154,102 @@ async def _persist_assistant_error(
     return {"ok": False, "error": message}
 
 
+async def _chain(db: Any, conversation: AiConversation, app_settings: Any) -> list[Candidate]:
+    """The conversation's own model first, then the primary and the
+    fallback model (Settings → AI) as fallbacks."""
+    chain: list[Candidate] = []
+    provider = conversation.provider
+    if provider is not None and provider.enabled:
+        chain.append(
+            Candidate(provider, AiModel(provider_id=provider.id, model_id=conversation.model_id))
+        )
+    for candidate in await model_chain(db, app_settings):
+        if not any(
+            c.provider.id == candidate.provider.id and c.model.model_id == candidate.model.model_id
+            for c in chain
+        ):
+            chain.append(Candidate(candidate.provider, candidate.model, fallback=True))
+    return chain
+
+
+@dataclass
+class _TurnOutcome:
+    final_text: str | None = None
+    turn_native: list[Any] = field(default_factory=list)
+    pending_actions: list[dict[str, Any]] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+async def _attempt(
+    db: Any,
+    owner: User,
+    conversation: AiConversation,
+    candidate: Candidate,
+    client: BaseAiClient,
+    messages: list[Any],
+    tools: list[Any],
+    outcome: _TurnOutcome,
+) -> None:
+    """The tool loop with one model. Raises `AiProviderError` when a call
+    fails; what was spent until then is already in `outcome` and recorded."""
+    for round_index in range(MAX_TOOL_ROUNDTRIPS):
+        started = time.monotonic()
+        result: ChatTurnResult = await client.send(
+            messages, tools, candidate.model.model_id, SYSTEM_PROMPT
+        )
+        outcome.input_tokens += result.input_tokens
+        outcome.output_tokens += result.output_tokens
+        await record_usage(
+            db,
+            user_id=owner.id,
+            provider_kind=candidate.provider.kind,
+            model_id=candidate.model.model_id,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            purpose=Purpose.ASSISTANT,
+            label=conversation.title,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            fallback=candidate.fallback,
+        )
+
+        if result.text:
+            outcome.final_text = result.text
+
+        if not result.tool_calls:
+            outcome.turn_native.append(result.raw_assistant_message)
+            return
+
+        outputs: list[tuple[ToolCall, str]] = []
+        for call in result.tool_calls:
+            spec = TOOL_SPECS.get(call.name)
+            if spec is not None and not spec.mutating:
+                # Read-only: safe to execute here and now.
+                outputs.append((call, await execute_read_only_tool(db, owner, call)))
+                continue
+            # Mutating (or unknown): recorded only. Permission check #2
+            # happens inside build_pending_action, which records a
+            # `denied` entry rather than dropping the call.
+            entry = await build_pending_action(db, owner, call)
+            outcome.pending_actions.append(entry)
+            if entry.get("status") == "denied":
+                feedback = str(entry.get("reason") or "Refused.")
+            else:
+                feedback = _PROPOSAL_FEEDBACK
+            outputs.append((call, feedback))
+
+        follow_up = client.build_tool_result_messages(result, outputs)
+        messages.extend(follow_up)
+        outcome.turn_native.extend(follow_up)
+
+        if round_index == MAX_TOOL_ROUNDTRIPS - 1:
+            logger.warning(
+                "AI turn for conversation %s hit the %d tool round-trip cap",
+                conversation.id,
+                MAX_TOOL_ROUNDTRIPS,
+            )
+
+
 async def _run_turn(
     conversation_id: str, user_message: str | None = None, *, allow_tools: bool
 ) -> dict[str, Any]:
@@ -124,6 +265,11 @@ async def _run_turn(
     conversation page can show it immediately rather than waiting for a
     background task to get scheduled first. This function then just
     replays history, which already ends with that message.
+
+    The conversation's own model answers; when it fails (a provider error
+    or its timeout), the primary and then the fallback model of Settings →
+    AI try in turn, from the start of the turn. Every turn is audit-logged
+    (`ai.turn`) with the model that answered, its tokens and its time.
     """
     async with db_session.AsyncSessionLocal() as db:
         conversation = await db.get(AiConversation, uuid.UUID(conversation_id))
@@ -150,120 +296,141 @@ async def _run_turn(
                 await db.commit()
             return await _persist_assistant_error(db, conversation.id, limit_error)
 
-        provider = conversation.provider
-        if provider is None or not provider.enabled:
+        chain = await _chain(db, conversation, app_settings)
+        if not chain:
             return await _persist_assistant_error(
                 db, conversation.id, "This conversation's AI provider is no longer enabled."
             )
 
-        try:
-            client = build_client(provider)
-        except AiProviderError as exc:
-            return await _persist_assistant_error(db, conversation.id, str(exc))
-
         if user_message is not None:
-            history = await _load_history(db, conversation.id)
-            user_native = client.build_user_message(user_message)
+            first_kind = chain[0].provider.kind
+            try:
+                native: list[Any] | None = [
+                    build_client(chain[0].provider).build_user_message(user_message)
+                ]
+            except AiProviderError:
+                native = None
             db.add(
                 AiMessage(
                     conversation_id=conversation.id,
                     role=AiMessageRole.USER,
                     content=user_message,
-                    provider_native=[user_native],
+                    provider_native=native,
+                    provider_kind=first_kind,
                 )
             )
             await db.commit()
-            messages: list[Any] = [*history, user_native]
-        else:
-            messages = await _load_history(db, conversation.id)
 
         # Permission filter #1: re-derived from the owner's current role.
         tools = available_tools(owner) if allow_tools else []
-
-        turn_native: list[Any] = []
-        pending_actions: list[dict[str, Any]] = []
-        final_text: str | None = None
-
-        for round_index in range(MAX_TOOL_ROUNDTRIPS):
+        started = time.monotonic()
+        failures: list[str] = []
+        spent = _TurnOutcome()
+        for candidate in chain:
             try:
-                result: ChatTurnResult = await client.send(
-                    messages, tools, conversation.model_id, SYSTEM_PROMPT
+                client = build_client(candidate.provider)
+            except AiProviderError as exc:
+                failures.append(f"{candidate.label}: {exc}")
+                continue
+            messages = await _load_history(db, conversation, candidate.provider.kind, client)
+            outcome = _TurnOutcome()
+            try:
+                await _attempt(
+                    db, owner, conversation, candidate, client, messages, tools, outcome
                 )
             except AiProviderError as exc:
-                return await _persist_assistant_error(db, conversation.id, str(exc))
-
-            await record_usage(
-                db,
-                user_id=owner.id,
-                provider_kind=provider.kind,
-                model_id=conversation.model_id,
-                input_tokens=result.input_tokens,
-                output_tokens=result.output_tokens,
+                failures.append(f"{candidate.label}: {exc}")
+                spent.input_tokens += outcome.input_tokens
+                spent.output_tokens += outcome.output_tokens
+                continue
+            outcome.input_tokens += spent.input_tokens
+            outcome.output_tokens += spent.output_tokens
+            return await _finish(
+                db, owner, conversation, candidate, outcome, failures, started
             )
 
-            if result.text:
-                final_text = result.text
-
-            if not result.tool_calls:
-                turn_native.append(result.raw_assistant_message)
-                break
-
-            outputs: list[tuple[ToolCall, str]] = []
-            for call in result.tool_calls:
-                spec = TOOL_SPECS.get(call.name)
-                if spec is not None and not spec.mutating:
-                    # Read-only: safe to execute here and now.
-                    outputs.append((call, await execute_read_only_tool(db, owner, call)))
-                    continue
-                # Mutating (or unknown): recorded only. Permission check #2
-                # happens inside build_pending_action, which records a
-                # `denied` entry rather than dropping the call.
-                entry = await build_pending_action(db, owner, call)
-                pending_actions.append(entry)
-                if entry.get("status") == "denied":
-                    feedback = str(entry.get("reason") or "Refused.")
-                else:
-                    feedback = _PROPOSAL_FEEDBACK
-                outputs.append((call, feedback))
-
-            follow_up = client.build_tool_result_messages(result, outputs)
-            messages.extend(follow_up)
-            turn_native.extend(follow_up)
-
-            if round_index == MAX_TOOL_ROUNDTRIPS - 1:
-                logger.warning(
-                    "AI turn for conversation %s hit the %d tool round-trip cap",
-                    conversation_id,
-                    MAX_TOOL_ROUNDTRIPS,
-                )
-
-        assistant_message = AiMessage(
-            conversation_id=conversation.id,
-            role=AiMessageRole.ASSISTANT,
-            content=final_text or _NO_TEXT_FALLBACK,
-            provider_native=turn_native or None,
-            pending_actions=pending_actions or None,
+        error = "; ".join(failures)
+        await log_event(
+            db,
+            actor=owner.username,
+            action="ai.turn",
+            summary=f'AI assistant failed to answer in "{conversation.title}"',
+            outcome=AuditOutcome.FAILURE,
+            target_type="ai_conversation",
+            target_id=conversation.id,
+            target_label=conversation.title,
+            details={
+                "models": [c.label for c in chain],
+                "error": error[:1000],
+                "tokens": spent.input_tokens + spent.output_tokens,
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            },
         )
-        db.add(assistant_message)
-        await db.commit()
+        return await _persist_assistant_error(db, conversation.id, error)
 
-        return {
-            "ok": True,
-            "message_id": str(assistant_message.id),
-            "pending_action_count": len(pending_actions),
-        }
+
+async def _finish(
+    db: Any,
+    owner: User,
+    conversation: AiConversation,
+    candidate: Candidate,
+    outcome: _TurnOutcome,
+    failures: list[str],
+    started: float,
+) -> dict[str, Any]:
+    assistant_message = AiMessage(
+        conversation_id=conversation.id,
+        role=AiMessageRole.ASSISTANT,
+        content=outcome.final_text or _NO_TEXT_FALLBACK,
+        provider_native=outcome.turn_native or None,
+        provider_kind=candidate.provider.kind,
+        pending_actions=outcome.pending_actions or None,
+    )
+    db.add(assistant_message)
+    await db.commit()
+    tokens = outcome.input_tokens + outcome.output_tokens
+    duration_ms = int((time.monotonic() - started) * 1000)
+    await log_event(
+        db,
+        actor=owner.username,
+        action="ai.turn",
+        summary=(
+            f'AI assistant answered in "{conversation.title}" with {candidate.label}'
+            + (" (fallback model)" if candidate.fallback else "")
+            + f" — {tokens} tokens, {duration_ms / 1000:.1f} s"
+        ),
+        target_type="ai_conversation",
+        target_id=conversation.id,
+        target_label=conversation.title,
+        details={
+            "model": candidate.label,
+            "fallback": candidate.fallback,
+            "failed_first": failures,
+            "tokens": tokens,
+            "input_tokens": outcome.input_tokens,
+            "output_tokens": outcome.output_tokens,
+            "duration_ms": duration_ms,
+            "proposed_actions": len(outcome.pending_actions),
+        },
+    )
+    return {
+        "ok": True,
+        "message_id": str(assistant_message.id),
+        "pending_action_count": len(outcome.pending_actions),
+    }
 
 
 # A turn can make up to MAX_TOOL_ROUNDTRIPS (5) sequential provider calls,
-# each with its own 90s timeout (CHAT_TIMEOUT_SECONDS in
-# app/ai/providers.py) — worst case, a genuinely slow model's turn takes
-# close to 450s. Both tasks below need a `time_limit` comfortably above
-# that, or Celery's own default (60s, see task_time_limit in
-# app/tasks/celery_app.py) kills the task via SIGKILL mid-call, long before
-# it would ever hit its own internal timeout — silently: nothing gets
-# persisted, and the conversation just never receives a reply. This was a
-# real bug, not a hypothetical one.
-_AI_TURN_TIME_LIMIT_SECONDS = 480
+# each with its provider's own timeout (90 s by default, at most
+# `MAX_AI_TIMEOUT_SECONDS` — Settings → AI), and when one fails the turn
+# starts over with the next model of the chain — worst case well over
+# 450 s. Both tasks below need a `time_limit` comfortably above that, or
+# Celery's own default (60s, see task_time_limit in app/tasks/celery_app.py)
+# kills the task via SIGKILL mid-call, long before it would ever hit its
+# own internal timeout — silently: nothing gets persisted, and the
+# conversation just never receives a reply. This was a real bug, not a
+# hypothetical one.
+_AI_TURN_TIME_LIMIT_SECONDS = 1800
 
 
 @celery_app.task(name="app.tasks.ai_jobs.run_ai_turn", time_limit=_AI_TURN_TIME_LIMIT_SECONDS)

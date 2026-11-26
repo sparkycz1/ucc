@@ -87,6 +87,11 @@ class Release(Base):
     assessment_queued_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # The last attempt's error, cleared on the next successful assessment.
     assessment_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The last successful assessment's cost: tokens (input + output, every
+    # model call it took, fallback included) and wall time, evidence
+    # gathering included.
+    assessment_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assessment_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # --- Human decisions (release.manage / update.override) ---
     # A manual risk level replaces the AI's for every verdict.

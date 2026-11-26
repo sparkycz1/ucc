@@ -30,7 +30,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, LargeBinary, String, func
+from sqlalchemy import Boolean, Integer, LargeBinary, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -63,6 +63,11 @@ class AiProviderConfig(Base):
     # app/web/routes/settings.py); ignored for the four fixed-endpoint kinds.
     base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     models_fetched_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # How long one model request may take before it counts as failed (and
+    # the fallback model, if any, is tried).
+    timeout_seconds: Mapped[int] = mapped_column(
+        Integer, default=90, server_default="90", nullable=False
+    )
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

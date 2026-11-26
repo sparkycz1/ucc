@@ -711,6 +711,24 @@ p { margin: 0 0 var(--space-3); }
 .issue-na { opacity: 0.7; }
 .risk-general { text-decoration: line-through; opacity: 0.7; }
 .nowrap { white-space: nowrap; }
+/* Release stages (app.releases.policy.STAGES); the meaning is the title. */
+abbr.badge { text-decoration: none; cursor: help; }
+.stage-ga { background: rgba(70, 191, 138, 0.16); color: var(--color-ok); }
+.stage-rc { background: rgba(224, 171, 74, 0.16); color: var(--color-warn); }
+.stage-t, .stage-u { background: rgba(240, 104, 95, 0.16); color: var(--color-danger); }
+/* Assessments: the consoles/devices waiting for a release. */
+.waiting-list { font-size: 0.85rem; }
+.waiting-list > div + div { margin-top: 0.15rem; }
+/* The release policy form (partials/_policy.html). */
+.stage-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
+}
+.stage-fieldset legend { padding: 0 var(--space-2); font-weight: 600; }
+.inline-check { display: block; margin: var(--space-1) 0; }
+.subtle-row td { color: var(--color-muted); }
 .source-links { display: inline-flex; flex-wrap: wrap; gap: 0.5rem; }
 .update-target { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
 

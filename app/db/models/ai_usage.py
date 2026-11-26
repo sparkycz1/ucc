@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -36,6 +36,15 @@ class AiUsageRecord(Base):
     model_id: Mapped[str] = mapped_column(String(255), nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # "assessment" / "assistant" (`app.ai.usage.Purpose`), what it was about
+    # ("UniFi Protect 7.2.105", a conversation's title), how long the call
+    # took, and whether the fallback model made it. NULL on rows before 0.4.0.
+    purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fallback: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), nullable=False, index=True

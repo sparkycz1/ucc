@@ -21,8 +21,11 @@ limit is hit.
 
 from __future__ import annotations
 
+import enum
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +39,13 @@ WEEK_WINDOW = timedelta(days=7)
 MONTH_WINDOW = timedelta(days=30)
 
 
+class Purpose(enum.StrEnum):
+    """What an AI call was for (`AiUsageRecord.purpose`)."""
+
+    ASSESSMENT = "assessment"
+    ASSISTANT = "assistant"
+
+
 async def record_usage(
     db: AsyncSession,
     *,
@@ -44,6 +54,10 @@ async def record_usage(
     model_id: str,
     input_tokens: int,
     output_tokens: int,
+    purpose: Purpose | None = None,
+    label: str | None = None,
+    duration_ms: int | None = None,
+    fallback: bool = False,
 ) -> None:
     """Write one usage row. Committed here rather than left to the caller —
     a turn that made a paid API call must be accounted for even if
@@ -55,9 +69,89 @@ async def record_usage(
             model_id=model_id,
             input_tokens=max(input_tokens, 0),
             output_tokens=max(output_tokens, 0),
+            purpose=purpose.value if purpose else None,
+            label=label[:255] if label else None,
+            duration_ms=duration_ms,
+            fallback=fallback,
         )
     )
     await db.commit()
+
+
+@dataclass(frozen=True)
+class WindowUsage:
+    calls: int
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+@dataclass(frozen=True)
+class UsageSummary:
+    """The token counter on Settings → AI."""
+
+    # "24h" / "7d" / "30d" → totals.
+    windows: dict[str, WindowUsage]
+    # The last 30 days per "<provider>/<model>", most tokens first.
+    by_model: list[tuple[str, WindowUsage]]
+    # The last 30 days per purpose ("assessment", "assistant", "" = older rows).
+    by_purpose: list[tuple[str, WindowUsage]]
+    recent: list[AiUsageRecord]
+
+
+_SUMS = (
+    func.count(AiUsageRecord.id),
+    func.coalesce(func.sum(AiUsageRecord.input_tokens), 0),
+    func.coalesce(func.sum(AiUsageRecord.output_tokens), 0),
+)
+
+
+def _usage(row: Any) -> WindowUsage:
+    return WindowUsage(int(row[0] or 0), int(row[1] or 0), int(row[2] or 0))
+
+
+async def usage_summary(db: AsyncSession, *, recent: int = 25) -> UsageSummary:
+    now = datetime.now(UTC)
+    windows = {}
+    for name, window in (("24h", DAY_WINDOW), ("7d", WEEK_WINDOW), ("30d", MONTH_WINDOW)):
+        row = (
+            await db.execute(select(*_SUMS).where(AiUsageRecord.created_at >= now - window))
+        ).one()
+        windows[name] = _usage(row)
+    since = now - MONTH_WINDOW
+    by_model = [
+        (f"{kind.value}/{model}", _usage(rest))
+        for kind, model, *rest in (
+            await db.execute(
+                select(AiUsageRecord.provider_kind, AiUsageRecord.model_id, *_SUMS)
+                .where(AiUsageRecord.created_at >= since)
+                .group_by(AiUsageRecord.provider_kind, AiUsageRecord.model_id)
+            )
+        ).all()
+    ]
+    by_model.sort(key=lambda item: item[1].tokens, reverse=True)
+    by_purpose = [
+        (purpose or "", _usage(rest))
+        for purpose, *rest in (
+            await db.execute(
+                select(AiUsageRecord.purpose, *_SUMS)
+                .where(AiUsageRecord.created_at >= since)
+                .group_by(AiUsageRecord.purpose)
+            )
+        ).all()
+    ]
+    by_purpose.sort(key=lambda item: item[1].tokens, reverse=True)
+    rows = list(
+        (
+            await db.execute(
+                select(AiUsageRecord).order_by(AiUsageRecord.created_at.desc()).limit(recent)
+            )
+        ).scalars()
+    )
+    return UsageSummary(windows, by_model, by_purpose, rows)
 
 
 async def get_usage_totals(db: AsyncSession, since: datetime) -> int:

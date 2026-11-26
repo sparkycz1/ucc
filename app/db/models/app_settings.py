@@ -26,7 +26,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, LargeBinary, String, func
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, LargeBinary, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -231,10 +231,23 @@ class AppSettings(Base):
         server_default=str(DEFAULT_MAX_ACCEPTABLE_RISK_LEVEL),
         nullable=False,
     )
-    # Which enabled model rates releases. NULL = assessment is off (releases
-    # are still discovered and listed, just never rated).
+    # The primary AI model (Settings → AI): rates releases and is the
+    # assistant's default. NULL = assessment is off (releases are still
+    # discovered and listed, just never rated). The column keeps its
+    # pre-0.4.0 name so an upgrade keeps the model already chosen.
     release_assessment_model_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("ai_models.id", ondelete="SET NULL"), nullable=True
+    )
+    # Tried when the primary fails (provider error, timeout, an unusable
+    # answer) — for assessments and the assistant alike (`app.ai.fallback`).
+    ai_fallback_model_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ai_models.id", ondelete="SET NULL"), nullable=True
+    )
+    # Release stages ("GA", "RC", "T", "U" — `app.releases.policy.STAGES`)
+    # hidden everywhere unless a Fabric, console or device overrides it:
+    # not listed, not offered as an update, not rated.
+    hidden_release_stages: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False
     )
     # Reddit only answers API calls with an app's OAuth credentials
     # ("script"/installed app at reddit.com/prefs/apps); both empty = Reddit

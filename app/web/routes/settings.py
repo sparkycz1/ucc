@@ -22,7 +22,8 @@ from app.ai.config import (
     get_selectable_models,
     replace_fetched_models,
 )
-from app.ai.providers import build_client
+from app.ai.providers import MAX_AI_TIMEOUT_SECONDS, MIN_AI_TIMEOUT_SECONDS, build_client
+from app.ai.usage import usage_summary
 from app.audit import log_event, verify_chain
 from app.auth.dependencies import require_permission
 from app.core.app_settings import get_or_create_app_settings
@@ -44,6 +45,7 @@ from app.db.models.app_settings import (
 from app.db.models.audit_log import AuditOutcome
 from app.db.models.role import Permission
 from app.db.session import get_db
+from app.releases.policy import global_policy, stages_from_form
 from app.releases.sources.web import validate_searxng_url
 from app.web.templating import t, templates
 
@@ -105,6 +107,9 @@ async def _render_settings(
         "ai_configs": [ai_configs[kind] for kind in AiProviderKind if kind in ai_configs],
         "openai_compatible_kind": AiProviderKind.OPENAI_COMPATIBLE.value,
         "selectable_models": await get_selectable_models(db),
+        "ai_usage": await usage_summary(db),
+        "global_policy": global_policy(app_settings),
+        "ai_timeout_range": (MIN_AI_TIMEOUT_SECONDS, MAX_AI_TIMEOUT_SECONDS),
         "web_search_kinds": list(WebSearchKind),
         "tabs": _tabs(request),
         "active_tab": tab,
@@ -526,7 +531,9 @@ async def update_release_settings(
     request: Request,
     db: AsyncSession = Depends(get_db),
     max_acceptable_risk_level: str = Form(""),
-    release_assessment_model_id: str = Form(""),
+    # Moved to Settings → AI in 0.4.0 ("primary model"); still accepted
+    # here when a form sends it, and left alone when it doesn't.
+    release_assessment_model_id: str | None = Form(None),
     reddit_client_id: str = Form(""),
     reddit_client_secret: str = Form(""),
     reddit_clear: str = Form(""),
@@ -544,9 +551,11 @@ async def update_release_settings(
     if error or level is None:
         errors.append(error or "Acceptable risk level must be 1 to 5.")
 
-    model_id: uuid.UUID | None = None
-    model_label = "off"
-    if release_assessment_model_id.strip():
+    model_id: uuid.UUID | None = app_settings.release_assessment_model_id
+    model_label = "unchanged"
+    if release_assessment_model_id is not None and not release_assessment_model_id.strip():
+        model_id, model_label = None, "off"
+    elif release_assessment_model_id is not None:
         selectable = {
             str(model.id): (config, model) for config, model in await get_selectable_models(db)
         }
@@ -586,7 +595,10 @@ async def update_release_settings(
         return await _render_settings(request, db, errors, tab="releases")
 
     assert level is not None
+    raw_form = {key: str(value) for key, value in (await request.form()).items()}
+    hidden = stages_from_form(raw_form, inherit_allowed=False) or []
     app_settings.max_acceptable_risk_level = level
+    app_settings.hidden_release_stages = hidden
     app_settings.release_assessment_model_id = model_id
     if reddit_clear:
         app_settings.reddit_client_id = None
@@ -619,6 +631,7 @@ async def update_release_settings(
         ),
         details={
             "max_acceptable_risk_level": level,
+            "hidden_release_stages": hidden,
             "model": model_label,
             "reddit": reddit_on,
             "web_search": kind.value,
@@ -654,6 +667,7 @@ async def update_ai_provider(
     # `oidc_client_secret` / `ldap_bind_password`.
     api_key: str = Form(""),
     base_url: str = Form(""),
+    timeout_seconds: str = Form(""),
 ) -> Response:
     config = await _get_provider_config(db, kind)
     if config is None:
@@ -673,10 +687,24 @@ async def update_ai_provider(
         # needs one — so enabling any provider requires one to be stored.
         errors.append("Enabling a provider needs an API key.")
 
+    timeout = config.timeout_seconds
+    if timeout_seconds.strip():
+        parsed, timeout_error = _parse_bounded_int(
+            timeout_seconds,
+            label="Timeout",
+            minimum=MIN_AI_TIMEOUT_SECONDS,
+            maximum=MAX_AI_TIMEOUT_SECONDS,
+        )
+        if timeout_error or parsed is None:
+            errors.append(timeout_error or "Timeout must be a whole number of seconds.")
+        else:
+            timeout = parsed
+
     if errors:
         return await _render_settings(request, db, errors, tab="ai")
 
     config.enabled = bool(enabled)
+    config.timeout_seconds = timeout
     if api_key:
         config.api_key_encrypted = encrypt_secret(api_key)
     if config.kind == AiProviderKind.OPENAI_COMPATIBLE:
@@ -692,7 +720,60 @@ async def update_ai_provider(
             f"({'enabled' if config.enabled else 'disabled'})"
         ),
         # Deliberately no key material, not even a length or a prefix.
-        details={"provider": config.kind.value, "enabled": config.enabled},
+        details={
+            "provider": config.kind.value,
+            "enabled": config.enabled,
+            "timeout_seconds": config.timeout_seconds,
+        },
+    )
+    return RedirectResponse(url="/settings?tab=ai", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/ai/model-choice", dependencies=[_manage, Depends(verify_csrf)])
+async def update_ai_model_choice(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    primary_model_id: str = Form(""),
+    fallback_model_id: str = Form(""),
+) -> Response:
+    """The primary model (release assessments, the assistant's default)
+    and the fallback tried when it fails — any enabled model of any
+    enabled provider (`app.ai.fallback`)."""
+    app_settings = await get_or_create_app_settings(db)
+    selectable = {
+        str(model.id): (config, model) for config, model in await get_selectable_models(db)
+    }
+    errors: list[str] = []
+    chosen: dict[str, tuple[uuid.UUID | None, str]] = {}
+    for name, raw in (("primary", primary_model_id), ("fallback", fallback_model_id)):
+        if not raw.strip():
+            chosen[name] = (None, "off")
+            continue
+        pair = selectable.get(raw.strip())
+        if pair is None:
+            errors.append("Choose one of the enabled AI models.")
+            chosen[name] = (None, "off")
+        else:
+            chosen[name] = (pair[1].id, f"{pair[0].kind.value}/{pair[1].model_id}")
+    if not errors and chosen["fallback"][0] is not None and (
+        chosen["fallback"][0] == chosen["primary"][0]
+    ):
+        errors.append("The fallback model must differ from the primary one.")
+    if errors:
+        return await _render_settings(request, db, errors, tab="ai")
+
+    app_settings.release_assessment_model_id = chosen["primary"][0]
+    app_settings.ai_fallback_model_id = chosen["fallback"][0]
+    await db.commit()
+    await log_event(
+        db,
+        request=request,
+        action="settings.ai_models.choice",
+        summary=(
+            f"Set the primary AI model to {chosen['primary'][1]} "
+            f"and the fallback to {chosen['fallback'][1]}"
+        ),
+        details={"primary": chosen["primary"][1], "fallback": chosen["fallback"][1]},
     )
     return RedirectResponse(url="/settings?tab=ai", status_code=status.HTTP_303_SEE_OTHER)
 

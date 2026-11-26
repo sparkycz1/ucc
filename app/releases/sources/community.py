@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+import httpx2
 
 from app.db.models.release import ReleaseKind
 from app.releases.evidence import CommunityRelease, Evidence, EvidenceItem, SourceError
@@ -147,8 +147,8 @@ def pick_latest(kind: str, product: str, items: list[Any]) -> ReleasePost | None
 
 
 class CommunityClient:
-    def __init__(self, http: httpx.AsyncClient | None = None) -> None:
-        self._http = http or httpx.AsyncClient(
+    def __init__(self, http: httpx2.AsyncClient | None = None) -> None:
+        self._http = http or httpx2.AsyncClient(
             timeout=TIMEOUT_SECONDS, headers={"user-agent": USER_AGENT}
         )
 
@@ -160,7 +160,7 @@ class CommunityClient:
             response = await self._http.post(
                 GRAPHQL_URL, json={"query": query, "variables": variables}
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise SourceError(f"community.ui.com: {exc.__class__.__name__}") from exc
         if response.status_code != 200:
             raise SourceError(f"community.ui.com: HTTP {response.status_code}")

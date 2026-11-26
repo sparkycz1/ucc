@@ -111,14 +111,37 @@ def sync_fabric(fabric_id: str) -> dict[str, Any]:
     return asyncio.run(_sync_fabric(fabric_id))
 
 
-async def _sync_all_fabrics() -> None:
-    """Beat sweep: enqueue one `sync_fabric` per enabled Fabric — never
-    awaited inline, so one slow API key can't hold up the others."""
+# A Fabric is due a little early rather than a whole tick late.
+_SYNC_SLACK = timedelta(seconds=30)
+
+
+async def _sync_all_fabrics(now: datetime | None = None) -> int:
+    """Beat's every-minute tick: enqueue one `sync_fabric` per enabled
+    Fabric whose sync interval (its own, else the global one) has passed
+    since it was last enqueued — never awaited inline, so one slow API key
+    can't hold up the others. Returns how many were enqueued."""
+    now = now or datetime.now(UTC)
     async with db_session.AsyncSessionLocal() as session:
-        result = await session.execute(select(Fabric.id).where(Fabric.is_enabled.is_(True)))
-        fabric_ids = [str(fid) for fid in result.scalars().all()]
-    for fabric_id in fabric_ids:
+        app_settings = await get_or_create_app_settings(session)
+        fabrics = (
+            await session.execute(select(Fabric).where(Fabric.is_enabled.is_(True)))
+        ).scalars()
+        due: list[str] = []
+        for fabric in fabrics:
+            interval = timedelta(
+                seconds=fabric.inventory_sync_interval_seconds
+                or app_settings.inventory_sync_interval_seconds
+            )
+            last = fabric.last_sync_attempt_at
+            if last is not None and last.tzinfo is None:
+                last = last.replace(tzinfo=UTC)
+            if last is None or now - last >= interval - _SYNC_SLACK:
+                fabric.last_sync_attempt_at = now
+                due.append(str(fabric.id))
+        await session.commit()
+    for fabric_id in due:
         sync_fabric.delay(fabric_id)
+    return len(due)
 
 
 @celery_app.task(name="app.tasks.jobs.sync_all_fabrics")

@@ -104,3 +104,21 @@
     {{ context_risk(verdict) }}
   {%- endif -%}
 {%- endmacro %}
+
+{# A release stage as community.ui.com names it ("GA", "RC", "T", "U"),
+   with what it means on hover. #}
+{% macro stage_badge(stage) -%}
+  {%- set code = (stage or '') | upper -%}
+  {%- if code in ('GA', 'RC', 'T', 'U') -%}
+    <abbr class="badge stage-{{ code | lower }}" title="{{ t(request, 'releases.stage.' ~ code) }}">{{ code }}</abbr>
+  {%- elif stage -%}
+    {{ stage }}
+  {%- else -%}
+    <span title="{{ t(request, 'releases.stage.unknown') }}">—</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# Where a setting in effect comes from — "(Fabric)", "(this device)". #}
+{% macro setting_source(level) -%}
+  <span class="hint">({{ t(request, "policy.from." ~ level) }})</span>
+{%- endmacro %}

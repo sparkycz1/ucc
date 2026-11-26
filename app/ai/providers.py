@@ -37,7 +37,9 @@ through it).
 
 Two explicit timeouts, not one blanket number: listing models is a quick
 admin action on the Settings page (15s), while a chat turn can legitimately
-involve a slow model producing a long answer (90s).
+involve a slow model producing a long answer — that one is set per
+provider on the Settings page (`AiProviderConfig.timeout_seconds`, 90s by
+default) and lands on the client as `chat_timeout`.
 
 `provider_native` messages (what's stored in `AiMessage.provider_native`
 and replayed verbatim into the next turn — see `app.ai.base`) stay plain
@@ -93,13 +95,15 @@ OPENAI_API_BASE = "https://api.openai.com/v1"
 # seconds," not tuning the connect phase separately from the read phase.
 MODELS_TIMEOUT_SECONDS = 15.0
 CHAT_TIMEOUT_SECONDS = 90.0
+# The range Settings → AI accepts for a provider's own timeout; the Celery
+# time limits of assessments and assistant turns are sized for the top.
+MIN_AI_TIMEOUT_SECONDS = 5
+MAX_AI_TIMEOUT_SECONDS = 300
 # google-genai's `HttpOptions.timeout` wants milliseconds, not seconds.
 _GEMINI_MODELS_TIMEOUT_MS = int(MODELS_TIMEOUT_SECONDS * 1000)
 _GEMINI_API_VERSION = "v1beta"
-_GEMINI_CHAT_TIMEOUT_MS = int(CHAT_TIMEOUT_SECONDS * 1000)
 # So does `openrouter`'s `timeout_ms=`.
 _OPENROUTER_MODELS_TIMEOUT_MS = int(MODELS_TIMEOUT_SECONDS * 1000)
-_OPENROUTER_CHAT_TIMEOUT_MS = int(CHAT_TIMEOUT_SECONDS * 1000)
 
 MAX_OUTPUT_TOKENS = 4096
 
@@ -188,7 +192,7 @@ class AnthropicClient(BaseAiClient):
                 max_tokens=MAX_OUTPUT_TOKENS,
                 system=system_prompt,
                 messages=messages,
-                timeout=CHAT_TIMEOUT_SECONDS,
+                timeout=self.chat_timeout,
                 **kwargs,
             )
         except anthropic.AnthropicError as exc:
@@ -312,7 +316,7 @@ class OpenAICompatibleClient(BaseAiClient):
             response = await self._client.chat.completions.create(
                 model=model,
                 messages=[{"role": "system", "content": system_prompt}, *messages],
-                timeout=CHAT_TIMEOUT_SECONDS,
+                timeout=self.chat_timeout,
                 **kwargs,
             )
         except openai.OpenAIError as exc:
@@ -444,7 +448,7 @@ class OpenRouterClient(BaseAiClient):
             response = await self._client.chat.send_async(
                 model=model,
                 messages=[{"role": "system", "content": system_prompt}, *messages],
-                timeout_ms=_OPENROUTER_CHAT_TIMEOUT_MS,
+                timeout_ms=int(self.chat_timeout * 1000),
                 **kwargs,
             )
         except Exception as exc:
@@ -569,7 +573,7 @@ class GeminiClient(BaseAiClient):
         config = genai_types.GenerateContentConfig(
             system_instruction=system_prompt,
             automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(disable=True),
-            http_options=genai_types.HttpOptions(timeout=_GEMINI_CHAT_TIMEOUT_MS),
+            http_options=genai_types.HttpOptions(timeout=int(self.chat_timeout * 1000)),
             tools=(
                 [{"function_declarations": [_gemini_declaration(t) for t in tools]}]
                 if tools
@@ -678,6 +682,13 @@ def decrypted_api_key(config: AiProviderConfig) -> str | None:
 
 
 def build_client(config: AiProviderConfig) -> BaseAiClient:
+    """`_build_client` with the provider's own request timeout applied."""
+    client = _build_client(config)
+    client.chat_timeout = float(config.timeout_seconds or CHAT_TIMEOUT_SECONDS)
+    return client
+
+
+def _build_client(config: AiProviderConfig) -> BaseAiClient:
     """Construct the right client for a provider row. Raises
     `AiProviderError` if the row isn't usable (missing key or base URL).
 

@@ -1,3 +1,4 @@
+{% from "partials/_policy.html" import risk_field, stages_field with context %}
     <label for="name">{{ t(request, "fabrics.table.name") }}</label>
     <input type="text" id="name" name="name" required maxlength="255" value="{{ form.name or '' }}">
 
@@ -17,11 +18,13 @@
     </label>
     <p class="hint">{{ t(request, "fabrics.form.enabled_hint") }}</p>
 
-    <label for="max_acceptable_risk_level">{{ t(request, "fabrics.form.max_risk") }}</label>
-    <select id="max_acceptable_risk_level" name="max_acceptable_risk_level">
-      <option value="" {{ 'selected' if form.max_acceptable_risk_level is none else '' }}>{{ t(request, "fabrics.form.max_risk_global") }}</option>
-      {% for level in range(1, 6) %}
-        <option value="{{ level }}" {{ 'selected' if form.max_acceptable_risk_level == level else '' }}>{{ level }} — {{ t(request, "releases.risk." ~ level) }}</option>
-      {% endfor %}
-    </select>
+    {{ risk_field(form.max_acceptable_risk_level | int if form.max_acceptable_risk_level else none, inherited) }}
     <p class="hint">{{ t(request, "fabrics.form.max_risk_hint") }}</p>
+
+    {{ stages_field(form.hidden_release_stages, inherited) }}
+
+    <label for="inventory_sync_interval_seconds">{{ t(request, "fabrics.form.sync_interval") }}</label>
+    <input type="number" id="inventory_sync_interval_seconds" name="inventory_sync_interval_seconds"
+           min="60" max="86400" step="1" value="{{ form.inventory_sync_interval_seconds or '' }}"
+           placeholder="{{ global_sync_interval }}">
+    <p class="hint">{{ t(request, "fabrics.form.sync_interval_hint", seconds=global_sync_interval) }}</p>
