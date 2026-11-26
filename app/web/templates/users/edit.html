@@ -107,6 +107,7 @@
 
     {% set active_grants = temporary_grants | selectattr('is_active') | list %}
     {% if active_grants %}
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr><th>{{ t(request, "users.edit.permission_col") }}</th><th>{{ t(request, "users.edit.granted_by") }}</th><th>{{ t(request, "users.edit.expires") }}</th><th></th></tr>
@@ -129,6 +130,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <p class="hint">{{ t(request, "users.edit.no_active_grants") }}</p>
     {% endif %}
@@ -151,6 +153,7 @@
     {% if temporary_grants | rejectattr('is_active') | list %}
       <details class="stack-gap">
         <summary>{{ t(request, "users.edit.history") }}</summary>
+        <div class="table-scroll">
         <table class="data-table">
           <thead>
             <tr><th>{{ t(request, "users.edit.permission_col") }}</th><th>{{ t(request, "users.edit.granted_by") }}</th><th>{{ t(request, "users.edit.granted") }}</th><th>{{ t(request, "users.edit.ended") }}</th></tr>
@@ -172,6 +175,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
       </details>
     {% endif %}
   </section>

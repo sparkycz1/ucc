@@ -4,7 +4,8 @@
 
 {% block content %}
   {% set current_user = request.state.user %}
-  <div class="page-header" data-live-fabric-id="{{ fabric.id }}" data-live-fabric-name="{{ fabric.name }}">
+  <div class="page-header" data-live-fabric-id="{{ fabric.id }}" data-live-fabric-name="{{ fabric.name }}"
+       data-live-text-inventory="{{ t(request, 'live.inventory') }}" data-live-text-updates="{{ t(request, 'live.updates') }}" data-live-text-changed="{{ t(request, 'live.changed') }}" data-live-text-blocked="{{ t(request, 'live.blocked') }}" data-live-text-blocked-hint="{{ t(request, 'live.blocked_hint') }}" data-live-text-on="{{ t(request, 'live.on') }}" data-live-text-on-hint="{{ t(request, 'live.on_hint') }}" data-live-text-enable="{{ t(request, 'live.enable') }}" data-live-text-enable-hint="{{ t(request, 'live.enable_hint') }}">
     <h1>
       {{ fabric.name }}
       {% if not fabric.is_enabled %}<span class="badge">{{ t(request, "fabrics.disabled") }}</span>{% endif %}

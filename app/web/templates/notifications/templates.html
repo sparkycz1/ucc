@@ -12,6 +12,8 @@
     <h2>{{ t(request, "notifications.templates.per_event_heading") }}</h2>
     <p class="hint">{{ t(request, "notifications.templates.hint") }}</p>
 
+    <div class="table-scroll">
+
     <table class="data-table">
       <thead>
         <tr>
@@ -35,6 +37,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </section>
 
   <section class="panel-group">
@@ -47,6 +50,7 @@
     <p class="hint">{{ t(request, "notifications.templates.custom_hint") }}</p>
 
     {% if custom_templates %}
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr>
@@ -72,6 +76,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <p class="hint">{{ t(request, "notifications.templates.no_custom") }}</p>
     {% endif %}

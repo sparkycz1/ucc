@@ -123,6 +123,7 @@
   <section class="panel">
     <h2>{{ t(request, "releases.affected", count=(affected | length)) }}</h2>
     {% if affected %}
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -143,6 +144,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
       <p class="hint">{{ t(request, "releases.affected_none") }}</p>
     {% endif %}
@@ -151,6 +153,7 @@
   {% if running %}
   <section class="panel">
     <h2>{{ t(request, "releases.running", count=(running | length)) }}</h2>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -169,12 +172,14 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </section>
   {% endif %}
 
   <section class="panel">
     <h2>{{ t(request, "releases.history") }}</h2>
     {% if history %}
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -197,6 +202,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
       <p class="hint">{{ t(request, "releases.history.empty") }}</p>
     {% endif %}

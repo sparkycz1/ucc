@@ -31,6 +31,8 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   </form>
 
+  <div class="table-scroll">
+
   <table class="data-table">
       <thead>
         <tr>
@@ -78,6 +80,7 @@
         {% endfor %}
       </tbody>
   </table>
+  </div>
 
   <div class="page-header-actions stack-gap" id="bulk-actions-bar">
       <span class="hint">{{ t(request, "users.bulk.with_selected") }}</span>

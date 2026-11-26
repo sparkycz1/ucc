@@ -84,6 +84,25 @@ class RecordedCeleryCalls(list[tuple[str, tuple[Any, ...], dict[str, Any]]]):
 
 
 @pytest.fixture(autouse=True)
+def ai_slots_free(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Autouse: assessment slots (`app.ai.slots`) are always free and no
+    Redis is contacted. Returns the tokens released, for tests that care."""
+    from app.ai import slots
+
+    released: list[str] = []
+
+    async def _acquire(limit: int, ttl: int) -> str:
+        return "test-slot"
+
+    async def _release(token: str) -> None:
+        released.append(token)
+
+    monkeypatch.setattr(slots, "acquire", _acquire)
+    monkeypatch.setattr(slots, "release", _release)
+    return released
+
+
+@pytest.fixture(autouse=True)
 def celery_calls(monkeypatch: pytest.MonkeyPatch) -> RecordedCeleryCalls:
     """Autouse: every test gets a clean recorder, reachable both as this
     fixture and as `app.state.celery_calls`."""

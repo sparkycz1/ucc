@@ -583,3 +583,88 @@ async def test_assistant_falls_back_with_a_plain_transcript(
         assert entry.details["model"] == "openai/backup-model" and entry.details["tokens"] == 15
         usage = (await db.execute(select(AiUsageRecord))).scalars().all()
         assert [(u.purpose, u.fallback) for u in usage] == [("assistant", True)]
+
+
+# --- 0.4.1: catalogue keeps three, console entries, layout ---------------------------
+
+
+async def test_hidden_stages_still_leave_three_versions_in_the_catalog(
+    jobs_db: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    celery_calls: Any,
+) -> None:
+    from app.releases import service
+    from app.releases.sources.community import CommunityClient
+
+    async def _search(self: Any, term: str, limit: int = 25) -> list[Any]:
+        if term != "UniFi Network Application":
+            return []
+        return [
+            {"id": f"n{n}", "slug": "s", "title": "UniFi Network Application",
+             "version": f"11.0.{n}", "stage": stage, "createdAt": "2026-11-01T00:00:00Z"}
+            for n, stage in ((110, "RC"), (108, "RC"), (104, "GA"), (103, "GA"), (99, "GA"))
+        ]  # fmt: skip
+
+    monkeypatch.setattr(CommunityClient, "search", _search)
+    async with jobs_db() as db:
+        (await get_or_create_app_settings(db)).hidden_release_stages = ["RC"]
+        await db.commit()
+    await release_jobs._refresh_release_catalog()
+    async with jobs_db() as db:
+        shown = await service.catalog(db, hidden_stages=frozenset({"RC"}))
+        network = next(g for g in shown if g.products == ["network"])
+        assert [r.version for r in network.releases] == ["11.0.104", "11.0.103", "11.0.99"]
+
+
+def test_a_consoles_own_device_entry_is_not_a_second_update() -> None:
+    console = Console(host_id="h", name="NVR", model="ENVR", os_version="6.0.11",
+                      os_update_available="6.0.17")  # fmt: skip
+    console.apps = []
+    console.devices = [Device(id=uuid.uuid4(), mac="m", model="ENVR", version="6.0.11",
+                              update_available="6.0.17")]  # fmt: skip
+    targets = update_targets([console], {})
+    assert [(t.kind, t.product) for t in targets] == [("os", "ENVR")]
+
+
+async def test_wide_tables_scroll_in_their_own_container(
+    client: Any, db_session_factory: Any, accept_any_api_key: Any
+) -> None:
+    from tests.conftest import create_fabric_via_web
+
+    fabric_id = await create_fabric_via_web(client, "Office")
+    await _console_in(db_session_factory, fabric_id)
+    for url in ("/assessments", "/releases", "/audit", f"/fabrics/{fabric_id}/inventory-panel"):
+        page = (await client.get(url)).text
+        assert page.count("<table") == page.count('<div class="table-scroll">'), url
+    assert ".table-scroll" in (await client.get("/static/css/style.css")).text
+
+
+async def test_an_assessment_without_a_free_slot_comes_back_later(
+    jobs_db: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    celery_calls: Any,
+) -> None:
+    from app.ai import slots
+
+    limits: list[int] = []
+
+    async def _full(limit: int, ttl: int) -> None:
+        limits.append(limit)
+        return None
+
+    monkeypatch.setattr(slots, "acquire", _full)
+    async with jobs_db() as db:
+        (await get_or_create_app_settings(db)).ai_max_concurrent_assessments = 3
+        await db.commit()
+    result = await release_jobs._assess_release(str(uuid.uuid4()), True)
+    assert result["ok"] is True and 30 <= result["deferred"] <= 60
+    assert limits == [3]
+    assert celery_calls.names == ["app.tasks.release_jobs.assess_release"]
+
+
+async def test_a_slot_is_released_after_the_assessment(
+    jobs_db: Any,  # noqa: F811
+    ai_slots_free: list[str],
+) -> None:
+    assert (await release_jobs._assess_release(str(uuid.uuid4())))["ok"] is False
+    assert ai_slots_free == ["test-slot"]

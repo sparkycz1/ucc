@@ -11,6 +11,7 @@
   <h2>{{ t(request, "scheduling.history.title") }}</h2>
 
   {% if runs %}
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -41,6 +42,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
 
     <div class="page-header-actions">
       {% if page > 1 %}

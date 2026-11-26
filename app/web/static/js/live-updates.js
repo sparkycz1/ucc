@@ -92,12 +92,15 @@
 
   const NOTIFY_PREF_KEY = "ucc:notifications-enabled";
 
+  // The page's own language: the template puts every text here as a
+  // `data-live-text-*` attribute (`t()` server-side), English as fallback.
+  function text(name, fallback) {
+    return anchor.getAttribute(`data-live-text-${name}`) || fallback;
+  }
+
   const KIND_MESSAGES = {
-    status: "Reachability status changed",
-    facts: "Facts refreshed",
-    packages: "Installed packages refreshed",
-    services: "Services refreshed",
-    updates: "Update availability changed",
+    inventory: text("inventory", "Inventory synced"),
+    updates: text("updates", "Updates or ratings changed"),
   };
 
   function notificationsWanted() {
@@ -123,7 +126,7 @@
     if (Notification.permission !== "granted") return;
     if (!notificationsWanted()) return;
     if (document.visibilityState !== "hidden") return; // tab is frontmost — the DOM update is enough
-    const body = KIND_MESSAGES[kind] || "Something changed";
+    const body = KIND_MESSAGES[kind] || text("changed", "Something changed");
     let notification;
     try {
       notification = new Notification(fabricName, { body, tag: `ucc-${fabricId}` });
@@ -148,17 +151,17 @@
 
     function render() {
       if (Notification.permission === "denied") {
-        button.textContent = "🔕 Notifications blocked";
+        button.textContent = "🔕 " + text("blocked", "Notifications blocked");
         button.disabled = true;
-        button.title = "Blocked in this browser's site settings.";
+        button.title = text("blocked-hint", "Blocked in this browser's site settings.");
         return;
       }
       if (Notification.permission === "granted" && notificationsWanted()) {
-        button.textContent = "🔔 Notifications on";
-        button.title = "Click to turn off background notifications for this Fabric's page.";
+        button.textContent = "🔔 " + text("on", "Notifications on");
+        button.title = text("on-hint", "Click to turn off background notifications for this Fabric's page.");
       } else {
-        button.textContent = "🔔 Enable notifications";
-        button.title = "Get a browser notification when this page updates while backgrounded.";
+        button.textContent = "🔔 " + text("enable", "Enable notifications");
+        button.title = text("enable-hint", "Get a browser notification when this page updates while backgrounded.");
       }
     }
 

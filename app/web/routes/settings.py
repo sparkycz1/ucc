@@ -47,6 +47,7 @@ from app.db.models.role import Permission
 from app.db.session import get_db
 from app.releases.policy import global_policy, stages_from_form
 from app.releases.sources.web import validate_searxng_url
+from app.tasks.release_jobs import refresh_release_catalog
 from app.web.templating import t, templates
 
 router = APIRouter(
@@ -597,6 +598,7 @@ async def update_release_settings(
     assert level is not None
     raw_form = {key: str(value) for key, value in (await request.form()).items()}
     hidden = stages_from_form(raw_form, inherit_allowed=False) or []
+    stages_changed = list(app_settings.hidden_release_stages or []) != hidden
     app_settings.max_acceptable_risk_level = level
     app_settings.hidden_release_stages = hidden
     app_settings.release_assessment_model_id = model_id
@@ -619,6 +621,10 @@ async def update_release_settings(
         app_settings.web_search_api_key_encrypted = encrypt_secret(web_search_api_key.strip())
     await db.commit()
 
+    if stages_changed:
+        # Fetch the newest versions of the stages now shown, so every
+        # catalogue line again has its three (`refresh_catalog`).
+        refresh_release_catalog.delay()
     reddit_on = bool(app_settings.reddit_client_id and app_settings.reddit_client_secret_encrypted)
     await log_event(
         db,
@@ -735,6 +741,7 @@ async def update_ai_model_choice(
     db: AsyncSession = Depends(get_db),
     primary_model_id: str = Form(""),
     fallback_model_id: str = Form(""),
+    ai_max_concurrent_assessments: str = Form(""),
 ) -> Response:
     """The primary model (release assessments, the assistant's default)
     and the fallback tried when it fails — any enabled model of any
@@ -759,9 +766,19 @@ async def update_ai_model_choice(
         chosen["fallback"][0] == chosen["primary"][0]
     ):
         errors.append("The fallback model must differ from the primary one.")
+    concurrency = app_settings.ai_max_concurrent_assessments
+    if ai_max_concurrent_assessments.strip():
+        parsed, concurrency_error = _parse_bounded_int(
+            ai_max_concurrent_assessments, label="Assessments at once", minimum=1, maximum=10
+        )
+        if concurrency_error or parsed is None:
+            errors.append(concurrency_error or "Assessments at once must be 1 to 10.")
+        else:
+            concurrency = parsed
     if errors:
         return await _render_settings(request, db, errors, tab="ai")
 
+    app_settings.ai_max_concurrent_assessments = concurrency
     app_settings.release_assessment_model_id = chosen["primary"][0]
     app_settings.ai_fallback_model_id = chosen["fallback"][0]
     await db.commit()
@@ -773,7 +790,11 @@ async def update_ai_model_choice(
             f"Set the primary AI model to {chosen['primary'][1]} "
             f"and the fallback to {chosen['fallback'][1]}"
         ),
-        details={"primary": chosen["primary"][1], "fallback": chosen["fallback"][1]},
+        details={
+            "primary": chosen["primary"][1],
+            "fallback": chosen["fallback"][1],
+            "max_concurrent_assessments": concurrency,
+        },
     )
     return RedirectResponse(url="/settings?tab=ai", status_code=status.HTTP_303_SEE_OTHER)
 

@@ -15,7 +15,7 @@
 
 {% macro risk_badge(level, reason=none) -%}
   {%- if level is none -%}
-    <span class="badge">{{ t(request, "releases.not_rated") }}</span>
+    <span class="badge badge-pending">{{ t(request, "releases.not_rated") }}</span>
   {%- else -%}
     <span class="badge risk-{{ level }}" title="{{ t(request, 'releases.risk.' ~ level) }}{% if reason %}: {{ reason }}{% endif %}">{{ t(request, "releases.risk_short", level=level) }}</span>
   {%- endif -%}
@@ -27,7 +27,7 @@
   {%- elif verdict.verdict == 'stop' -%}
     <span class="badge badge-error" title="{{ t(request, 'releases.verdict.stop_hint', max=verdict.max_risk_level) }}">{{ t(request, "releases.verdict.stop") }}</span>
   {%- elif verdict.verdict == 'pending' -%}
-    <span class="badge" title="{{ t(request, 'releases.verdict.pending_hint') }}">{{ t(request, "releases.verdict.pending") }}</span>
+    <span class="badge badge-pending" title="{{ t(request, 'releases.verdict.pending_hint') }}">{{ t(request, "releases.verdict.pending") }}</span>
   {%- endif -%}
 {%- endmacro %}
 
@@ -86,8 +86,11 @@
     —
   {%- else -%}
     <span class="source-links">
-    {%- for source in sources[:limit] %}
-      {%- if source.url and (source.url.startswith('https://') or source.url.startswith('http://')) %}
+    {%- set ns = namespace(kind=none, n=0) %}
+    {%- for source in sources[:limit] if source.url and (source.url.startswith('https://') or source.url.startswith('http://')) %}
+      {%- if source.kind == ns.kind %}{% set ns.n = ns.n + 1 %}
+        <a class="source-more" href="{{ source.url }}" target="_blank" rel="noopener noreferrer nofollow" title="{{ source.title }}">{{ ns.n }}</a>
+      {%- else %}{% set ns.kind = source.kind %}{% set ns.n = 1 %}
         <a href="{{ source.url }}" target="_blank" rel="noopener noreferrer nofollow" title="{{ source.title }}">{{ t(request, "releases.source_kind." ~ source.kind) if source.kind in ('community', 'reddit', 'web') else source.kind }}</a>
       {%- endif %}
     {%- endfor %}
@@ -121,4 +124,15 @@
 {# Where a setting in effect comes from — "(Fabric)", "(this device)". #}
 {% macro setting_source(level) -%}
   <span class="hint">({{ t(request, "policy.from." ~ level) }})</span>
+{%- endmacro %}
+
+{# A long, machine-written text (a provider error, a sync failure): its
+   start, and the rest one click away — so one error can't take over a
+   page. #}
+{% macro long_text(text, limit=160) -%}
+  {%- if text and text | length > limit -%}
+    <details class="long-text"><summary>{{ text[:limit] }}…</summary>{{ text }}</details>
+  {%- else -%}
+    {{ text or '—' }}
+  {%- endif -%}
 {%- endmacro %}

@@ -285,13 +285,21 @@ async def _line_titles(
     return lines
 
 
-async def refresh_catalog(db: AsyncSession) -> list[Release]:
+async def refresh_catalog(
+    db: AsyncSession, *, hidden_stages: frozenset[str] = frozenset()
+) -> list[Release]:
     """Read the newest release posts from community.ui.com and upsert them
     as `Release` rows: every application (kind=app), and the UniFi OS and
     firmware lines of every console and device in an enabled Fabric (one
     row per installed model, so verdicts find them). Does not commit.
     Returns the catalogue's current rows. A community.ui.com failure stops
-    the refresh, leaving the existing rows as they are."""
+    the refresh, leaving the existing rows as they are. Posts in
+    `hidden_stages` (the global setting) are skipped before the newest
+    `CATALOG_VERSIONS` are taken, so a line still shows that many."""
+
+    def shown(post: Any) -> bool:
+        return normalize_stage(post.stage or "GA") not in hidden_stages
+
     lines = await _line_titles(db, await installed_products(db))
     community = CommunityClient()
     try:
@@ -302,7 +310,7 @@ async def refresh_catalog(db: AsyncSession) -> list[Release]:
                 logger.info("Release catalog refresh failed at %s: %s", product, exc)
                 return await _catalog_rows(db)
             posts = sorted(
-                matching_posts("app", product, items),
+                filter(shown, matching_posts("app", product, items)),
                 key=lambda p: version_key(p.version) or (),
                 reverse=True,
             )[:CATALOG_VERSIONS]
@@ -315,7 +323,11 @@ async def refresh_catalog(db: AsyncSession) -> list[Release]:
                 logger.info("Release catalog refresh failed at %s: %s", title, exc)
                 break
             posts = sorted(
-                [p for p in matching_posts(kind, products[0], items) if p.title == title],
+                [
+                    p
+                    for p in matching_posts(kind, products[0], items)
+                    if p.title == title and shown(p)
+                ],
                 key=lambda p: version_key(p.version) or (),
                 reverse=True,
             )[:CATALOG_VERSIONS]

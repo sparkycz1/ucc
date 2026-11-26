@@ -3,7 +3,7 @@
   {%- if policy.risk_from in ('console', 'device') or policy.stages_from in ('console', 'device') %}
     <span class="badge badge-tag" title="{{ t(request, 'policy.own_hint') }}">{{ t(request, "policy.own", level=policy.max_risk_level) }}{% for stage in policy.hidden_stages | sort %} −{{ stage }}{% endfor %}</span>
   {%- endif %}
-  {%- if request.state.user.has_permission('fabric.manage') %} <a href="{{ url }}" class="hint" title="{{ t(request, 'policy.edit_hint') }}">{{ t(request, "policy.edit") }}</a>{% endif %}
+  {%- if request.state.user.has_permission('fabric.manage') %} <a href="{{ url }}" class="settings-link" title="{{ t(request, 'policy.edit_hint') }}" aria-label="{{ t(request, 'policy.edit_hint') }}">⚙</a>{% endif %}
 {%- endmacro %}
 <p class="hint">
   {% if fabric.last_sync_error %}
@@ -60,6 +60,8 @@
       </div>
     {% endif %}
 
+    <div class="table-scroll">
+
     <table class="data-table">
       <thead>
         <tr>
@@ -90,9 +92,11 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
 
     {% if console.devices %}
     <h3>{{ t(request, "fabrics.devices_heading", count=(console.devices | length)) }}</h3>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -120,6 +124,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% endif %}
   </section>
 {% endfor %}
