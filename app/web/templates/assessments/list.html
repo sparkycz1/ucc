@@ -1,12 +1,19 @@
 {% extends "base.html" %}
-{% from "partials/_release.html" import version_link, risk_badge, source_links with context %}
+{% from "partials/_release.html" import version_link, risk_badge, source_links, stage_badge, verdict_badge with context %}
 
 {% block title %}{{ t(request, "nav.assessments") }} — ucc{% endblock %}
 
 {% block content %}
+  {% set current_user = request.state.user %}
   <div class="page-header">
     <h1>{{ t(request, "nav.assessments") }}</h1>
     <div class="page-header-actions">
+      {% if current_user.has_permission('release.manage') and assessment_configured and releases %}
+        <form method="post" action="/assessments/assess-all" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button" title="{{ t(request, 'releases.assess_all_hint') }}">{{ t(request, "releases.assess_all") }}</button>
+        </form>
+      {% endif %}
       {% if show_all %}
         <a class="button button-secondary" href="/assessments">{{ t(request, "releases.show_pending") }}</a>
       {% else %}
@@ -17,6 +24,9 @@
 
   <p class="hint">{{ t(request, "releases.intro", level=max_risk_level) }}</p>
 
+  {% if request.query_params.get('queued') %}
+    <div class="alert alert-ok"><p>{{ t(request, "releases.assess_all_queued", count=request.query_params.get('queued')) }}</p></div>
+  {% endif %}
   {% if not assessment_configured %}
     <div class="alert alert-warn"><p>{{ t(request, "releases.not_configured") }}</p></div>
   {% endif %}
@@ -35,6 +45,7 @@
         <th>{{ t(request, "releases.table.why") }}</th>
         <th>{{ t(request, "releases.sources") }}</th>
         <th>{{ t(request, "releases.table.pending") }}</th>
+        <th>{{ t(request, "releases.table.waiting") }}</th>
         <th>{{ t(request, "releases.table.assessed") }}</th>
         <th><span class="visually-hidden">{{ t(request, "catalog.more") }}</span></th>
       </tr>
@@ -52,7 +63,7 @@
             {% if current_versions.get(release.id) %} → {% endif %}
             <strong>{{ version_link(release.kind, release.product, release.version) }}</strong>
           </td>
-          <td>{{ release.stage or '—' }}</td>
+          <td>{{ stage_badge(release.stage) }}</td>
           <td>
             {{ risk_badge(release.effective_risk_level) }}
             {% if release.manual_risk_level is not none %}<span class="badge" title="{{ t(request, 'releases.manual_hint') }}">{{ t(request, "releases.manual") }}</span>{% endif %}
@@ -65,6 +76,13 @@
               {{ count.targets }}
               {% if count.stop %}<span class="badge badge-error">{{ t(request, "releases.stop_count", count=count.stop) }}</span>{% endif %}
             {% else %}—{% endif %}
+          </td>
+          <td class="waiting-list">
+            {% set items = waiting.get(release.id, []) %}
+            {% for fabric, verdict in items[:8] %}
+              <div>{{ verdict_badge(verdict) }} {{ verdict.target.label }} <span class="hint">· {{ fabric.name }}</span></div>
+            {% else %}—{% endfor %}
+            {% if items | length > 8 %}<a href="/releases/{{ release.id }}">{{ t(request, "releases.and_more", count=(items | length) - 8) }}</a>{% endif %}
           </td>
           <td>
             {% if release.assessed_at %}{{ release.assessed_at | local_time('%Y-%m-%d %H:%M') }}

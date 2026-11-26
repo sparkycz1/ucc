@@ -39,6 +39,7 @@ from sqlalchemy import JSON, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.models.ai_provider import AiProviderKind
 from app.db.pg_enum import pg_enum
 
 
@@ -70,6 +71,14 @@ class AiMessage(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     provider_native: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    # Whose wire format `provider_native` is in. NULL = the conversation's
+    # own provider (every message before 0.4.0). A turn answered by the
+    # fallback model stores that provider's format, and a history that
+    # mixes formats is replayed as a plain-text transcript instead
+    # (`app.tasks.ai_jobs._load_history`).
+    provider_kind: Mapped[AiProviderKind | None] = mapped_column(
+        pg_enum(AiProviderKind, name="ai_provider_kind"), nullable=True
+    )
     pending_actions: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     # Assigned in Python (`datetime.now(UTC)`), not via a DB `server_default`

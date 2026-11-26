@@ -1,4 +1,10 @@
-{% from "partials/_release.html" import version_link, update_cell, installed_risk, risk_badge with context %}
+{% from "partials/_release.html" import version_link, update_cell, installed_risk, risk_badge, stage_badge, setting_source with context %}
+{% macro own_settings(policy, url) -%}
+  {%- if policy.risk_from in ('console', 'device') or policy.stages_from in ('console', 'device') %}
+    <span class="badge badge-tag" title="{{ t(request, 'policy.own_hint') }}">{{ t(request, "policy.own", level=policy.max_risk_level) }}{% for stage in policy.hidden_stages | sort %} −{{ stage }}{% endfor %}</span>
+  {%- endif %}
+  {%- if request.state.user.has_permission('fabric.manage') %} <a href="{{ url }}" class="hint" title="{{ t(request, 'policy.edit_hint') }}">{{ t(request, "policy.edit") }}</a>{% endif %}
+{%- endmacro %}
 <p class="hint">
   {% if fabric.last_sync_error %}
     <span class="badge badge-error">{{ t(request, "fabrics.sync_failed") }}</span> {{ fabric.last_sync_error }}
@@ -10,8 +16,9 @@
 </p>
 
 <p class="hint">
-  {{ t(request, "fabrics.max_risk_in_effect", level=max_risk_level) }}
-  {% if fabric_overrides_risk %}{{ t(request, "fabrics.max_risk_fabric") }}{% else %}{{ t(request, "fabrics.max_risk_global_note") }}{% endif %}
+  {{ t(request, "fabrics.max_risk_in_effect", level=fabric_policy.max_risk_level) }} {{ setting_source(fabric_policy.risk_from) }}
+  · {{ t(request, "policy.hidden_stages") }}:
+  {% for stage in fabric_policy.hidden_stages | sort %}{{ stage_badge(stage) }} {% else %}{{ t(request, "policy.none") }} {% endfor %}{{ setting_source(fabric_policy.stages_from) }}
 </p>
 
 {% if not consoles %}
@@ -26,6 +33,7 @@
       {{ console.name or console.host_id }}
       {% if console.is_online %}<span class="badge badge-ok">{{ t(request, "fabrics.online") }}</span>
       {% else %}<span class="badge badge-error">{{ t(request, "fabrics.offline") }}</span>{% endif %}
+      <small>{{ own_settings(console_policies[console.id], "/fabrics/" ~ fabric.id ~ "/consoles/" ~ console.id ~ "/settings") }}</small>
     </h2>
     <p class="hint">
       <span title="{{ console.model or '' }}">{{ console.model_name or console.model or '—' }}</span>{% if console.ip_address %} · {{ console.ip_address }}{% endif %}
@@ -99,7 +107,7 @@
       <tbody>
         {% for device in console.devices %}
         <tr>
-          <td>{{ device.name or device.mac }}</td>
+          <td>{{ device.name or device.mac }} {{ own_settings(device_policies[device.id], "/fabrics/" ~ fabric.id ~ "/devices/" ~ device.id ~ "/settings") }}</td>
           <td title="{{ device.model or '' }}">{{ device.model_name or device.model or '—' }}</td>
           <td>{{ (device.site.name or device.site.site_id) if device.site else '—' }}</td>
           <td title="{{ device.version or '' }}">{{ version_link('firmware', device.model, device.version | normalize_version) }} {{ installed_risk(installed.get(('device', device.id))) }}</td>

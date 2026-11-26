@@ -107,7 +107,13 @@ MAX_REASON = 200
 
 
 class AssessmentError(Exception):
-    """The model's answer could not be used."""
+    """The model's answer could not be used. Carries what the call cost, so
+    a paid but unusable answer is still accounted for."""
+
+    def __init__(self, message: str, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        super().__init__(message)
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 class _Issue(BaseModel):
@@ -249,8 +255,14 @@ async def assess(
     turn = await client.send(
         [client.build_user_message(prompt)], [], model_id, system_prompt(locale)
     )
+    try:
+        result = parse_answer(turn.text)
+    except AssessmentError as exc:
+        raise AssessmentError(
+            str(exc), input_tokens=turn.input_tokens, output_tokens=turn.output_tokens
+        ) from exc
     return AssessmentOutcome(
-        result=parse_answer(turn.text),
+        result=result,
         input_tokens=turn.input_tokens,
         output_tokens=turn.output_tokens,
     )

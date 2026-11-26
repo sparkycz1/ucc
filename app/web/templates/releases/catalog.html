@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "partials/_release.html" import version_link, risk_badge, source_links with context %}
+{% from "partials/_release.html" import version_link, risk_badge, source_links, stage_badge with context %}
 
 {% block title %}{{ t(request, "nav.releases") }} — ucc{% endblock %}
 
@@ -18,6 +18,9 @@
   </div>
 
   <p class="hint">{{ t(request, "catalog.intro", level=max_risk_level) }}</p>
+  {% if hidden_stages %}
+    <p class="hint">{{ t(request, "catalog.hidden_stages") }} {% for stage in hidden_stages %}{{ stage_badge(stage) }} {% endfor %}</p>
+  {% endif %}
   {% if refreshing %}
     <div class="alert alert-ok"><p>{{ t(request, "catalog.refreshing") }}</p></div>
   {% endif %}
@@ -55,7 +58,7 @@
           {% for release in group.releases %}
             <tr>
               <td class="nowrap"><strong>{{ version_link(release.kind, release.product, release.version) }}</strong></td>
-              <td>{{ release.stage or '—' }}</td>
+              <td>{{ stage_badge(release.stage) }}</td>
               <td class="nowrap">{{ release.published_at | local_time('%Y-%m-%d') if release.published_at else '—' }}</td>
               <td class="nowrap">
                 <a href="/releases/{{ release.id }}">{{ risk_badge(release.effective_risk_level, release.short_reason) }}</a>

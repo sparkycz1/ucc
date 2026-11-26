@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -52,6 +52,11 @@ class Console(Base):
     # connector proxy). `None` = the console reports no schedule.
     auto_update_schedule: Mapped[str | None] = mapped_column(String(100), nullable=True)
     auto_update_include_apps: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # ucc's own settings for this one (`app.releases.policy`), kept across
+    # syncs (a sync updates the row, it never recreates it). NULL = inherit
+    # from the Fabric, then the global setting.
+    max_acceptable_risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hidden_release_stages: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     last_seen_at: Mapped[datetime | None] = mapped_column(nullable=True)
 

@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.ai.fallback import model_chain
 from app.core.security import decrypt_secret
 from app.db.models.ai_model import AiModel
 from app.db.models.ai_provider import AiProviderConfig
@@ -26,6 +27,7 @@ from app.db.models.fabric import Fabric
 from app.db.models.release import LatestRelease, Release, ReleaseKind
 from app.db.models.user import User
 from app.releases.evidence import Evidence, SourceError
+from app.releases.policy import global_policy, normalize_stage
 from app.releases.products import APP_TITLES, search_term, version_key
 from app.releases.sources.community import CommunityClient, matching_posts
 from app.releases.sources.reddit import RedditClient
@@ -37,7 +39,7 @@ from app.releases.verdicts import (
     installed_targets,
     load_latest,
     load_releases,
-    max_risk_for,
+    policy_for,
     update_targets,
     verdicts,
 )
@@ -56,16 +58,12 @@ LATEST_LOOKUPS_PER_RUN = 40
 async def assessment_model(
     db: AsyncSession, app_settings: AppSettings
 ) -> tuple[AiProviderConfig, AiModel] | None:
-    """The configured model, if it and its provider are still enabled."""
-    if app_settings.release_assessment_model_id is None:
+    """The first usable model of the primary/fallback chain
+    (`app.ai.fallback`), if any — `None` means assessment is off."""
+    chain = await model_chain(db, app_settings)
+    if not chain:
         return None
-    model = await db.get(AiModel, app_settings.release_assessment_model_id)
-    if model is None or not model.enabled:
-        return None
-    provider = await db.get(AiProviderConfig, model.provider_id)
-    if provider is None or not provider.enabled:
-        return None
-    return provider, model
+    return chain[0].provider, chain[0].model
 
 
 def product_label(release: Release) -> str:
@@ -365,14 +363,23 @@ def _newest(rows: Iterable[Release]) -> list[Release]:
 
 
 async def catalog(
-    db: AsyncSession, fabric_ids: Iterable[uuid.UUID] | None = None
+    db: AsyncSession,
+    fabric_ids: Iterable[uuid.UUID] | None = None,
+    *,
+    hidden_stages: frozenset[str] = frozenset(),
 ) -> list[CatalogGroup]:
     """The Releases page: every application's newest `CATALOG_VERSIONS`
     releases with a community.ui.com post (in `catalog_products` order),
     then the UniFi OS and firmware lines of what is installed in
     `fabric_ids` (default: every enabled Fabric) — a scoped viewer sees
-    only the lines of hardware in Fabrics they may see."""
+    only the lines of hardware in Fabrics they may see. Releases in
+    `hidden_stages` (the global setting, `app.releases.policy`) are left
+    out, so the newest versions shown are the newest of the rest."""
     groups: list[CatalogGroup] = []
+
+    def shown(release: Release) -> bool:
+        return normalize_stage(release.stage) not in hidden_stages
+
     app_keys = [product for product, _title in catalog_products()]
     app_rows = (
         await db.execute(
@@ -385,7 +392,8 @@ async def catalog(
     ).scalars()
     by_app: dict[str, list[Release]] = {product: [] for product in app_keys}
     for release in app_rows:
-        by_app[release.product].append(release)
+        if shown(release):
+            by_app[release.product].append(release)
     for product, title in catalog_products():
         rows = _newest(by_app[product])
         if rows:
@@ -405,7 +413,7 @@ async def catalog(
         by_line: dict[tuple[str, str], list[Release]] = {key: [] for key in lines}
         for release in line_rows:
             key = (release.kind, release.title or "")
-            if key in by_line and release.product in lines[key]:
+            if key in by_line and release.product in lines[key] and shown(release):
                 by_line[key].append(release)
         for kind in (ReleaseKind.OS.value, ReleaseKind.FIRMWARE.value):
             for (line_kind, title), products in sorted(lines.items()):
@@ -506,6 +514,35 @@ async def share_rating(db: AsyncSession, release: Release) -> list[Release]:
 REQUEUE_AFTER = timedelta(hours=1)
 
 
+async def stage_wanted(db: AsyncSession, release: Release, app_settings: AppSettings) -> bool:
+    """Whether `release` should be rated: its stage is unknown or shown
+    globally, or some enabled Fabric, console or device that would update
+    to it (or runs it) shows that stage. A release nobody sees isn't worth
+    the tokens."""
+    stage = normalize_stage(release.stage)
+    if stage is None or not global_policy(app_settings).hides(stage):
+        return True
+    key = (release.kind, release.product, release.version)
+    fabrics = (
+        await db.execute(
+            select(Fabric)
+            .where(Fabric.is_enabled.is_(True))
+            .options(
+                selectinload(Fabric.consoles).selectinload(Console.apps),
+                selectinload(Fabric.consoles).selectinload(Console.devices),
+            )
+        )
+    ).scalars()
+    for fabric in fabrics:
+        consoles = list(fabric.consoles)
+        latest = await load_latest(db, installed_keys(consoles))
+        resolve = policy_for(fabric, app_settings)
+        for target in [*update_targets(consoles, latest), *installed_targets(consoles)]:
+            if target.key == key and not resolve(target).hides(stage):
+                return True
+    return False
+
+
 async def visible_verdicts(
     db: AsyncSession, user: User, *, installed: bool = False
 ) -> list[tuple[Fabric, TargetVerdict]]:
@@ -538,6 +575,7 @@ async def visible_verdicts(
         if installed:
             targets += installed_targets(consoles)
         releases = await load_releases(db, targets)
-        max_level = max_risk_for(fabric, app_settings.max_acceptable_risk_level)
-        out.extend((fabric, v) for v in verdicts(targets, releases, max_level))
+        out.extend(
+            (fabric, v) for v in verdicts(targets, releases, policy_for(fabric, app_settings))
+        )
     return out

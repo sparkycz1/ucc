@@ -12,7 +12,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ColumnElement, ForeignKey, String, UniqueConstraint, func, or_
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    ColumnElement,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    or_,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -61,6 +71,11 @@ class Device(Base):
     # Site Manager's own verdict ("upToDate", "updateAvailable", ...) — it can
     # say an update exists while `update_available` is empty (offline devices).
     firmware_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # ucc's own settings for this one (`app.releases.policy`), kept across
+    # syncs (a sync updates the row, it never recreates it). NULL = inherit
+    # from the Fabric, then the global setting.
+    max_acceptable_risk_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hidden_release_stages: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     @property
     def has_update(self) -> bool:

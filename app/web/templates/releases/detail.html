@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "partials/_release.html" import version_link, risk_badge, verdict_badge, context_risk with context %}
+{% from "partials/_release.html" import version_link, risk_badge, verdict_badge, context_risk, stage_badge with context %}
 
 {% block title %}{{ label }} {{ release.version }} — ucc{% endblock %}
 
@@ -19,7 +19,7 @@
 
   <p class="hint">
     {{ t(request, "releases.kind." ~ release.kind) }} · <span title="{{ release.product }}">{{ model_names.get(release.product, release.product) }}</span>
-    {% if release.stage %} · {{ release.stage }}{% endif %}
+    {% if release.stage %} · {{ stage_badge(release.stage) }}{% endif %}
     {% if release.published_at %} · {{ t(request, "releases.published", when=(release.published_at | local_time('%Y-%m-%d'))) }}{% endif %}
     {% if release.community_url %} · <a href="{{ release.community_url }}" target="_blank" rel="noopener noreferrer">{{ t(request, "releases.notes") }}</a>{% endif %}
   </p>
@@ -55,7 +55,8 @@
       </ul>
     {% endif %}
     {% if release.assessed_at %}
-      <p class="hint">{{ t(request, "releases.assessed_by", when=(release.assessed_at | local_time('%Y-%m-%d %H:%M %Z')), model=release.assessed_by_model or '—') }}</p>
+      <p class="hint">{{ t(request, "releases.assessed_by", when=(release.assessed_at | local_time('%Y-%m-%d %H:%M %Z')), model=release.assessed_by_model or '—') }}
+        {%- if release.assessment_tokens is not none %} · {{ t(request, "releases.assessment_cost", tokens=release.assessment_tokens, seconds=("%.1f" | format((release.assessment_duration_ms or 0) / 1000))) }}{% endif %}</p>
     {% elif not assessment_configured %}
       <p class="hint">{{ t(request, "releases.not_configured") }}</p>
     {% else %}

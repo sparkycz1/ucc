@@ -21,7 +21,7 @@
         <label for="provider_model">{{ t(request, "ai.model") }}</label>
         <select id="provider_model" name="provider_model">
           {% for provider, model in selectable_models %}
-            <option value="{{ provider.id }}:{{ model.model_id }}">
+            <option value="{{ provider.id }}:{{ model.model_id }}" {{ 'selected' if model.id == primary_model_id else '' }}>
               {{ provider.kind.value }} — {{ model.model_id }}
             </option>
           {% endfor %}

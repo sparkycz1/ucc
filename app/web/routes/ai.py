@@ -38,10 +38,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.base import AiProviderError, BaseAiClient
 from app.ai.config import get_or_create_ai_provider_configs, get_selectable_models
+from app.ai.fallback import model_chain
 from app.ai.providers import build_client
 from app.ai.tools import missing_permission
 from app.audit import log_event
 from app.auth.dependencies import get_current_user, require_permission
+from app.core.app_settings import get_or_create_app_settings
 from app.core.csrf import verify_csrf
 from app.db.models.ai_conversation import AiConversation, derive_title
 from app.db.models.ai_message import AiMessage, AiMessageRole, PendingActionStatus
@@ -113,7 +115,7 @@ async def _render_conversation(
 
 
 async def _send_user_message(
-    db: AsyncSession, conversation: AiConversation, client: BaseAiClient, text: str
+    db: AsyncSession, conversation: AiConversation, client: BaseAiClient | None, text: str
 ) -> None:
     """Persists one human message and enqueues the turn that answers it —
     shared by `post_message` (an existing conversation's compose box) and
@@ -126,7 +128,10 @@ async def _send_user_message(
             conversation_id=conversation.id,
             role=AiMessageRole.USER,
             content=text,
-            provider_native=[client.build_user_message(text)],
+            # No client: the conversation's own model is unusable and the
+            # fallback answers from the plain text (`ai_jobs._load_history`).
+            provider_native=[client.build_user_message(text)] if client else None,
+            provider_kind=conversation.provider.kind if client else None,
         )
     )
     await db.commit()
@@ -177,6 +182,8 @@ async def list_conversations(
         {
             "conversations": conversations,
             "selectable_models": selectable,
+            # Preselected: the primary model of Settings → AI.
+            "primary_model_id": (await get_or_create_app_settings(db)).release_assessment_model_id,
             "can_manage_settings": user.has_permission(Permission.SETTINGS_MANAGE),
             "csrf_token": request.state.csrf_token,
         },
@@ -352,14 +359,17 @@ async def post_message(
         return await _render_conversation(request, db, conversation, ["Write a message first."])
 
     provider = conversation.provider
-    if provider is None or not provider.enabled:
-        return await _render_conversation(
-            request, db, conversation, ["This conversation's AI provider is no longer enabled."]
-        )
-    try:
-        client = build_client(provider)
-    except AiProviderError as exc:
-        return await _render_conversation(request, db, conversation, [str(exc)])
+    client: BaseAiClient | None = None
+    problem = "This conversation's AI provider is no longer enabled."
+    if provider is not None and provider.enabled:
+        try:
+            client = build_client(provider)
+        except AiProviderError as exc:
+            problem = str(exc)
+    if client is None and not await model_chain(db, await get_or_create_app_settings(db)):
+        # Nothing could answer: neither this conversation's model nor the
+        # primary/fallback model of Settings → AI.
+        return await _render_conversation(request, db, conversation, [problem])
 
     if conversation.title in ("", "New conversation"):
         conversation.title = derive_title(text)

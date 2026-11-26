@@ -105,7 +105,6 @@ async def status_page(
     app_settings = await get_or_create_app_settings(db)
     runs = {row.name: row for row in (await db.execute(select(JobRun))).scalars()}
     intervals = {
-        "sync-all-fabrics": timedelta(seconds=app_settings.inventory_sync_interval_seconds),
         "refresh-release-catalog": timedelta(hours=app_settings.release_catalog_interval_hours),
     }
     jobs = []
