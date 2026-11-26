@@ -25,6 +25,10 @@
           {% endfor %}
         </select>
         <p class="hint">{{ t(request, "settings.ai.fallback_hint") }}</p>
+        <label for="ai_max_concurrent_assessments">{{ t(request, "settings.ai.concurrency") }}</label>
+        <input type="number" id="ai_max_concurrent_assessments" name="ai_max_concurrent_assessments"
+               min="1" max="10" step="1" value="{{ app_settings.ai_max_concurrent_assessments }}">
+        <p class="hint">{{ t(request, "settings.ai.concurrency_hint") }}</p>
         <button type="submit" class="button">{{ t(request, "common.save") }}</button>
       </form>
     {% else %}

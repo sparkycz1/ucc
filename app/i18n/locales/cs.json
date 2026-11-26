@@ -666,6 +666,8 @@
     "catalog.empty": "Z community.ui.com zatím nejsou načtená žádná vydání — seznam se načte při startu služby beat a pak každý den (Nastavení → Kontroly); „Obnovit teď“ ho načte hned.",
     "catalog.published": "Vydáno",
     "catalog.yours": "Vaše konzole",
+    "settings.ai.concurrency_hint": "Kolik hodnocení vydání smí volat AI současně (1–10). Ostatní počkají, až na ně přijde řada — „Ohodnotit vše“ tak lokální model nezahltí do timeoutů. Asistenta se to netýká.",
+    "settings.ai.concurrency": "Současně běžících hodnocení",
     "settings.ai.providers_title": "Poskytovatelé",
     "live.enable_hint": "Notifikace v prohlížeči, když se stránka změní, zatímco je na pozadí.",
     "live.enable": "Zapnout notifikace",

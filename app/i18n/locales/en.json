@@ -666,6 +666,8 @@
     "catalog.empty": "No releases read from community.ui.com yet — the list is read when the beat service starts and then every day (Settings → Checks); “Refresh now” reads it right away.",
     "catalog.published": "Published",
     "catalog.yours": "Your consoles",
+    "settings.ai.concurrency_hint": "How many release assessments may call the AI at the same time (1–10). The rest wait their turn — \"Assess all\" won't flood a local model into timeouts. The assistant isn't limited.",
+    "settings.ai.concurrency": "Release assessments at once",
     "settings.ai.providers_title": "Providers",
     "live.enable_hint": "Get a browser notification when this page updates while backgrounded.",
     "live.enable": "Enable notifications",

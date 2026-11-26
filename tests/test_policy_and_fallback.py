@@ -637,3 +637,34 @@ async def test_wide_tables_scroll_in_their_own_container(
         page = (await client.get(url)).text
         assert page.count("<table") == page.count('<div class="table-scroll">'), url
     assert ".table-scroll" in (await client.get("/static/css/style.css")).text
+
+
+async def test_an_assessment_without_a_free_slot_comes_back_later(
+    jobs_db: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    celery_calls: Any,
+) -> None:
+    from app.ai import slots
+
+    limits: list[int] = []
+
+    async def _full(limit: int, ttl: int) -> None:
+        limits.append(limit)
+        return None
+
+    monkeypatch.setattr(slots, "acquire", _full)
+    async with jobs_db() as db:
+        (await get_or_create_app_settings(db)).ai_max_concurrent_assessments = 3
+        await db.commit()
+    result = await release_jobs._assess_release(str(uuid.uuid4()), True)
+    assert result["ok"] is True and 30 <= result["deferred"] <= 60
+    assert limits == [3]
+    assert celery_calls.names == ["app.tasks.release_jobs.assess_release"]
+
+
+async def test_a_slot_is_released_after_the_assessment(
+    jobs_db: Any,  # noqa: F811
+    ai_slots_free: list[str],
+) -> None:
+    assert (await release_jobs._assess_release(str(uuid.uuid4())))["ok"] is False
+    assert ai_slots_free == ["test-slot"]

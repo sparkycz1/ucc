@@ -243,6 +243,12 @@ class AppSettings(Base):
     ai_fallback_model_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("ai_models.id", ondelete="SET NULL"), nullable=True
     )
+    # How many release assessments may call the AI at once, across every
+    # worker (`app.ai.slots`) — a local model times out when "Assess all"
+    # sends it dozens of requests together.
+    ai_max_concurrent_assessments: Mapped[int] = mapped_column(
+        Integer, default=2, server_default="2", nullable=False
+    )
     # Release stages ("GA", "RC", "T", "U" — `app.releases.policy.STAGES`)
     # hidden everywhere unless a Fabric, console or device overrides it:
     # not listed, not offered as an update, not rated.

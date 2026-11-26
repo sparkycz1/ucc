@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -40,6 +41,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
+from app.ai import slots as ai_slots
 from app.ai.base import AiProviderError
 from app.ai.fallback import model_chain
 from app.ai.providers import build_client
@@ -163,9 +165,30 @@ def discover_releases(fabric_id: str) -> dict[str, Any]:
     return asyncio.run(_discover_releases(fabric_id))
 
 
+# A task that finds every assessment slot taken comes back this much later
+# (plus jitter, so a batch doesn't retry in lockstep).
+SLOT_RETRY_SECONDS = 30
+
+
 async def _assess_release(release_id: str, force: bool = False) -> dict[str, Any]:
-    """Rate one release. `force` (a person asked for it) rates it even when
-    its stage is hidden everywhere."""
+    """Rate one release, in one of the `ai_max_concurrent_assessments`
+    slots (`app.ai.slots`); with none free, re-enqueue itself a little
+    later instead. `force` (a person asked for it) rates it even when its
+    stage is hidden everywhere."""
+    async with db_session.AsyncSessionLocal() as session:
+        limit = (await get_or_create_app_settings(session)).ai_max_concurrent_assessments
+    token = await ai_slots.acquire(limit, ASSESSMENT_TIME_LIMIT_SECONDS)
+    if token is None:
+        delay = SLOT_RETRY_SECONDS + random.randint(0, SLOT_RETRY_SECONDS)  # noqa: S311
+        assess_release.apply_async((release_id, force), countdown=delay)
+        return {"ok": True, "deferred": delay}
+    try:
+        return await _assess_release_now(release_id, force)
+    finally:
+        await ai_slots.release(token)
+
+
+async def _assess_release_now(release_id: str, force: bool) -> dict[str, Any]:
     async with db_session.AsyncSessionLocal() as session:
         release = await session.get(Release, uuid.UUID(release_id))
         if release is None:
