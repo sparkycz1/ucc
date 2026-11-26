@@ -668,3 +668,17 @@ async def test_a_slot_is_released_after_the_assessment(
 ) -> None:
     assert (await release_jobs._assess_release(str(uuid.uuid4())))["ok"] is False
     assert ai_slots_free == ["test-slot"]
+
+
+def test_a_starting_worker_frees_the_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ai import slots
+    from app.tasks import celery_app as celery_module
+
+    cleared: list[bool] = []
+
+    async def _clear() -> None:
+        cleared.append(True)
+
+    monkeypatch.setattr(slots, "clear", _clear)
+    celery_module._on_worker_ready()
+    assert cleared == [True]

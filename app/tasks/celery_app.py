@@ -62,7 +62,7 @@ from typing import Any
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import beat_init, worker_process_init
+from celery.signals import beat_init, worker_process_init, worker_ready
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -278,6 +278,19 @@ def _on_beat_start(sender: Any = None, **kwargs: Any) -> None:
         celery_app.send_task("app.tasks.release_jobs.refresh_release_catalog")
     except Exception:  # noqa: BLE001 — never keep Beat from starting
         logger.warning("Could not enqueue the startup catalogue refresh", exc_info=True)
+
+
+@worker_ready.connect
+def _on_worker_ready(sender: Any = None, **kwargs: Any) -> None:
+    """Free the AI assessment slots (`app.ai.slots`) a stopped worker left
+    taken — after an upgrade or restart every assessment would otherwise
+    wait until those expire (the task time limit, 15 min). Best-effort."""
+    from app.ai import slots
+
+    try:
+        asyncio.run(slots.clear())
+    except Exception:  # noqa: BLE001 - never stop a worker from starting over this
+        logger.warning("Could not clear the AI assessment slots at worker start")
 
 
 @worker_process_init.connect

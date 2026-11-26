@@ -790,6 +790,8 @@
     "status.no_fabrics": "No Fabrics.",
     "status.assessments": "Release assessments",
     "status.queued": "{count} queued",
+    "status.slots_hint": "How many release assessments are calling the AI right now, out of the limit in Settings → AI; the rest wait for a free slot.",
+    "status.slots": "AI slots {used}/{limit} in use",
     "status.failed_count": "{count} with an error",
     "status.last_assessed": "last assessed {when}",
     "status.release": "Release",
