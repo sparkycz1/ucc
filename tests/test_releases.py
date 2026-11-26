@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import select
 
@@ -186,11 +186,11 @@ def test_parse_release_and_questions_fill_evidence() -> None:
 async def test_community_client_surfaces_http_errors_as_source_errors() -> None:
     from app.releases.evidence import SourceError
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.url.host == "community.svc.ui.com"
-        return httpx.Response(503)
+        return httpx2.Response(503)
 
-    client = CommunityClient(http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    client = CommunityClient(http=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
     with pytest.raises(SourceError, match="HTTP 503"):
         await client.find_release("app", "network", "11.0.104")
     await client.aclose()
@@ -201,7 +201,7 @@ async def test_community_client_latest_on_the_firmware_line() -> None:
     version's post — never a guess when the installed version isn't found."""
     calls: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         term = json.loads(request.content)["variables"]["searchTerm"]
         calls.append(term)
         items = [
@@ -210,9 +210,9 @@ async def test_community_client_latest_on_the_firmware_line() -> None:
             {"id": "c", "slug": "s", "title": "UniFi AirWire and UDB Switch", "version": "8.5.21",
              "stage": "GA"},
         ]  # fmt: skip
-        return httpx.Response(200, json={"data": {"releases": {"items": items}}})
+        return httpx2.Response(200, json={"data": {"releases": {"items": items}}})
 
-    client = CommunityClient(http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    client = CommunityClient(http=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
     latest = await client.latest_release("firmware", "US48PRO", "7.6.11")
     assert latest is not None and latest.version == "7.7.3"
     assert await client.latest_release("firmware", "US48PRO", "1.0.0") is None
@@ -255,25 +255,25 @@ def test_reddit_parse_posts_and_comments() -> None:
 async def test_reddit_client_authenticates_then_searches() -> None:
     seen: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(f"{request.method} {request.url.host}{request.url.path}")
         if request.url.path == "/api/v1/access_token":
             assert request.headers["authorization"].startswith("Basic ")
-            return httpx.Response(200, json={"access_token": "tok"})
+            return httpx2.Response(200, json={"access_token": "tok"})
         assert request.headers["authorization"] == "Bearer tok"
         if "/search" in request.url.path:
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={"data": {"children": [{"data": {
                     "id": "p1", "title": "Network 11.0.104 issues", "selftext": "",
                     "permalink": "/r/UNIFI/comments/p1/x/", "num_comments": 1}}]}},
             )  # fmt: skip
-        return httpx.Response(
+        return httpx2.Response(
             200, json=[{}, {"data": {"children": [{"kind": "t1", "data": {"body": "yes"}}]}}]
         )
 
     client = reddit.RedditClient(
-        "id", "secret", http=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        "id", "secret", http=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     )
     evidence = Evidence()
     await client.collect(evidence, "UniFi Network Application", "11.0.104")
@@ -288,7 +288,7 @@ async def test_reddit_rejected_credentials_are_a_source_error() -> None:
     client = reddit.RedditClient(
         "id",
         "bad",
-        http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(401))),
+        http=httpx2.AsyncClient(transport=httpx2.MockTransport(lambda r: httpx2.Response(401))),
     )
     with pytest.raises(SourceError, match="401"):
         await client.check()

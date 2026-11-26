@@ -60,8 +60,13 @@ def next_run(
     defaults; Beat reads the configured value at its start)."""
     try:
         if isinstance(schedule, crontab):
-            remaining: timedelta = schedule.remaining_estimate(last_started or now)
-            upcoming = now + remaining
+            # `remaining_delta`, not `remaining_estimate`: the latter measures
+            # from Celery's own clock, not from `now`.
+            start, delta, _ = schedule.remaining_delta(last_started or now)
+            upcoming: datetime = start + delta
+            if upcoming < now:
+                start, delta, _ = schedule.remaining_delta(now)
+                upcoming = start + delta
             # Celery's estimate lands a few seconds short of the minute.
             if upcoming.second or upcoming.microsecond:
                 upcoming = upcoming.replace(second=0, microsecond=0) + timedelta(minutes=1)

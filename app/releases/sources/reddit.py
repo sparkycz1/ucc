@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import httpx2
 
 from app.releases.evidence import Evidence, EvidenceItem, SourceError
 from app.releases.text import html_to_text
@@ -90,11 +90,11 @@ def parse_comments(payload: object) -> list[tuple[str, int | None]]:
 
 class RedditClient:
     def __init__(
-        self, client_id: str, client_secret: str, http: httpx.AsyncClient | None = None
+        self, client_id: str, client_secret: str, http: httpx2.AsyncClient | None = None
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
-        self._http = http or httpx.AsyncClient(
+        self._http = http or httpx2.AsyncClient(
             timeout=TIMEOUT_SECONDS, headers={"user-agent": USER_AGENT}
         )
         self._token: str | None = None
@@ -111,7 +111,7 @@ class RedditClient:
                 data={"grant_type": "client_credentials"},
                 auth=(self._client_id, self._client_secret),
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise SourceError(f"Reddit: {exc.__class__.__name__}") from exc
         if response.status_code != 200:
             raise SourceError(f"Reddit rejected the app credentials (HTTP {response.status_code})")
@@ -130,7 +130,7 @@ class RedditClient:
             response = await self._http.get(
                 API_URL + path, params=params, headers={"authorization": f"Bearer {token}"}
             )
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise SourceError(f"Reddit: {exc.__class__.__name__}") from exc
         if response.status_code != 200:
             raise SourceError(f"Reddit: HTTP {response.status_code}")

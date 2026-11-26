@@ -63,6 +63,11 @@ dependencies = [
     # need. Without it here, a production image built with `uv sync
     # --no-dev` fails to import app.main at all.
     "httpx>=0.28.1",
+    # This app's own HTTP calls (Site Manager, community.ui.com, Reddit, web
+    # search, webhooks) use httpx2, the maintained successor of httpx that
+    # `anthropic`, `openai` and `google-genai` already build on. Plain httpx
+    # above stays only for authlib and openrouter, which import it.
+    "httpx2>=2.16.2",
     # TOTP (RFC 6238) generation/verification for two-factor authentication.
     "pyotp>=2.12.1",
     # Renders the TOTP enrollment QR code as inline SVG — deliberately used
