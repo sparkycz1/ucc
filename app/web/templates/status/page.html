@@ -87,7 +87,9 @@
   <section class="panel">
     <h2>{{ t(request, "status.assessments") }}</h2>
     <p>
-      {{ t(request, "status.queued", count=queued) }} ·
+      <span title="{{ t(request, 'status.queued_hint') }}">{{ t(request, "status.queued", count=queued) }}</span> ·
+      {% if retrying %}<span title="{{ t(request, 'status.retrying_hint') }}">{{ t(request, "status.retrying", count=retrying) }}</span> ·{% endif %}
+      {% if hidden_count %}<span title="{{ t(request, 'status.hidden_hint') }}">{{ t(request, "status.hidden", count=hidden_count) }}</span> ·{% endif %}
       {% if slots_in_use is not none %}<span class="badge {{ 'badge-warn' if slots_in_use >= slots_limit else 'badge-ok' }}" title="{{ t(request, 'status.slots_hint') }}">{{ t(request, "status.slots", used=slots_in_use, limit=slots_limit) }}</span> ·{% endif %}
       {{ t(request, "status.failed_count", count=failed_count) }} ·
       {{ t(request, "status.last_assessed", when=(last_assessed | local_time('%Y-%m-%d %H:%M') if last_assessed else t(request, "status.never"))) }}

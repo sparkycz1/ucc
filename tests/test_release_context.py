@@ -540,14 +540,25 @@ async def test_status_page(
         db.add(JobRun(name="refresh-release-catalog", last_started_at=datetime.now(UTC),
                       last_finished_at=datetime.now(UTC), last_ok=False,
                       last_error_at=datetime.now(UTC), last_error="HTTP 503"))  # fmt: skip
+        now = datetime.now(UTC)
         db.add(Release(kind="app", product="network", version="1.0.0",
-                       assessment_error="Rate limited"))  # fmt: skip
+                       assessment_error="Rate limited", assessment_queued_at=now))  # fmt: skip
+        db.add(Release(kind="app", product="network", version="1.0.1", assessment_queued_at=now))
+        db.add(Release(kind="app", product="network", version="1.0.2", stage="RC",
+                       assessment_queued_at=now))  # fmt: skip
+        db.add(Release(kind="app", product="network", version="1.0.3",
+                       assessment_queued_at=now - timedelta(hours=2)))  # fmt: skip
+        (await get_or_create_app_settings(db)).hidden_release_stages = ["RC"]
         await db.commit()
     page = await client.get("/status")
     assert page.status_code == 200
     assert "Releases catalogue" in page.text and "HTTP 503" in page.text
     assert "Rate limited" in page.text and "1 online" in page.text
     assert "AI slots 0/2 in use" in page.text
+    # Only what really waits is "queued"; a failed or lost one is retried,
+    # a hidden stage isn't rated on purpose.
+    assert ">1 queued<" in page.text and "2 failed, retried within the hour" in page.text
+    assert "1 in a hidden stage" in page.text
     assert 'href="/status"' in (await client.get("/dashboard")).text
 
     await login_as(client, permissions={Permission.FABRIC_VIEW}, username="viewer")
